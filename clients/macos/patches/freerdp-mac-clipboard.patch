@@ -1,0 +1,37 @@
+diff --git a/client/Mac/Clipboard.m b/client/Mac/Clipboard.m
+index c336620..9fb7a55 100644
+--- a/client/Mac/Clipboard.m
++++ b/client/Mac/Clipboard.m
+@@ -223,12 +223,12 @@ static UINT mac_cliprdr_server_format_list(CliprdrClientContext *cliprdr,
+ 		else if (format->formatId == CF_OEMTEXT)
+ 		{
+ 			if (formatId == 0)
+-				formatId == CF_OEMTEXT;
++				formatId = CF_OEMTEXT;
+ 		}
+ 		else if (format->formatId == CF_TEXT)
+ 		{
+ 			if (formatId == 0)
+-				formatId == CF_TEXT;
++				formatId = CF_TEXT;
+ 		}
+ 	}
+ 
+@@ -343,9 +343,14 @@ mac_cliprdr_server_format_data_response(CliprdrClientContext *cliprdr,
+ 		                                       encoding:NSUTF8StringEncoding];
+ 		free(data);
+ 
+-		NSArray *types = [[NSArray alloc] initWithObjects:NSPasteboardTypeString, nil];
+-		[view->pasteboard_wr declareTypes:types owner:view];
+-		[view->pasteboard_wr setString:str forType:NSPasteboardTypeString];
++		if (str)
++			dispatch_async(dispatch_get_main_queue(), ^{
++				NSArray *types = [[NSArray alloc] initWithObjects:NSPasteboardTypeString, nil];
++				[view->pasteboard_wr declareTypes:types owner:view];
++				[view->pasteboard_wr setString:str forType:NSPasteboardTypeString];
++				[types release];
++				[str release];
++			});
+ 	}
+ 
+ 	return CHANNEL_RC_OK;

@@ -1,0 +1,67 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: go test ./...
+      - run: go vet ./...
+      - run: cargo test --workspace
+      - run: pnpm check
+      - run: pnpm test
+      - run: pnpm build
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test
+        working-directory: clients/macos
+      - run: ./scripts/build-app.sh release
+        working-directory: clients/macos
+      - run: plutil -lint 'App/Info.plist'
+        working-directory: clients/macos
+      - run: codesign --verify --deep --strict --verbose=2 '.build/app/VC Workspace.app'
+        working-directory: clients/macos
+
+  guest-agent-artifacts:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: vc-vdi-guest-agent-linux-amd64
+            path: target/release/vc-vdi-guest-agent
+          - os: windows-latest
+            artifact: vc-vdi-guest-agent-windows-amd64
+            path: target/release/vc-vdi-guest-agent.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release --package vc-vdi-guest-agent
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.path }}
+          if-no-files-found: error

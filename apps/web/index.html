@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN" data-theme-mode="system">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="VC Workspace is an open-source virtual desktop platform for Proxmox VE, native clients, and AI agents through MCP." />
+    <meta property="og:title" content="VC Workspace" />
+    <meta property="og:description" content="Open-source, self-hosted workspaces on Proxmox VE for people and AI agents." />
+    <meta property="og:type" content="website" />
+    <link id="vc-workspace-icon" rel="icon" type="image/svg+xml" />
+    <title>VC Workspace</title>
+    <script>
+      (() => {
+        const root = document.documentElement
+        try {
+          const locale = localStorage.getItem('vc-vdi-locale')
+          if (locale === 'en' || locale === 'zh-CN') root.lang = locale
+          const mode = localStorage.getItem('vc-vdi-theme')
+          if (mode === 'light' || mode === 'dark') {
+            root.dataset.themeMode = mode
+            root.dataset.theme = mode
+            root.style.colorScheme = mode
+          } else {
+            root.dataset.themeMode = 'system'
+            root.style.colorScheme = 'light dark'
+          }
+        } catch {
+          root.dataset.themeMode = 'system'
+        }
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

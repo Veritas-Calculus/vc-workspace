@@ -1,0 +1,12 @@
+.env
+.DS_Store
+node_modules/
+dist/
+coverage/
+target/
+*.log
+.idea/
+.vscode/
+.cache/
+.build/
+.swiftpm/

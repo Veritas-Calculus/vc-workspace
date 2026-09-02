@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vc-workspace
+  labels:
+    app.kubernetes.io/part-of: vc-workspace
+spec:
+  tls:
+    - hosts:
+        - workspace.example.com
+      secretName: vc-workspace-tls
+  rules:
+    - host: workspace.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: vc-workspace-web
+                port:
+                  name: http

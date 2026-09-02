@@ -1,0 +1,1199 @@
+openapi: 3.1.0
+info:
+  title: VC Workspace API
+  version: 0.1.0
+  description: HTTP contract used by the Web, native clients, and the MCP service.
+servers:
+  - url: /api/v1
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      responses:
+        '200':
+          description: Process is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, const: ok }
+  /ready:
+    get:
+      operationId: getReadiness
+      responses:
+        '200':
+          description: Process can reach its required database dependency
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, const: ready }
+        '503': { $ref: '#/components/responses/Error' }
+  /system:
+    get:
+      operationId: getSystem
+      responses:
+        '200':
+          description: Public bootstrap and capability state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/System' }
+  /setup/admin:
+    post:
+      operationId: createInitialAdmin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [setup_token, username, display_name, password]
+              properties:
+                setup_token: { type: string }
+                username: { type: string, minLength: 3, maxLength: 64 }
+                display_name: { type: string }
+                password: { type: string, minLength: 12, maxLength: 128 }
+      responses:
+        '201': { $ref: '#/components/responses/WebSession' }
+        '409': { $ref: '#/components/responses/Error' }
+  /auth/login:
+    post:
+      operationId: loginLocal
+      requestBody: { $ref: '#/components/requestBodies/LocalLogin' }
+      responses:
+        '201': { $ref: '#/components/responses/WebSession' }
+        '401': { $ref: '#/components/responses/Error' }
+  /auth/logout:
+    post:
+      operationId: logoutWeb
+      security: [{ cookieAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/CSRFToken' }]
+      responses:
+        '204': { description: Session revoked }
+        '403': { $ref: '#/components/responses/Error' }
+  /auth/oidc/start:
+    get:
+      operationId: startOIDC
+      parameters:
+        - in: query
+          name: client
+          schema: { type: string, enum: [web, macos], default: web }
+      responses:
+        '302': { description: Redirect to the configured identity provider }
+        '503': { $ref: '#/components/responses/Error' }
+  /auth/oidc/callback:
+    get:
+      operationId: completeOIDC
+      parameters:
+        - { in: query, name: code, required: true, schema: { type: string } }
+        - { in: query, name: state, required: true, schema: { type: string } }
+      responses:
+        '303': { description: Redirect to the Web app or registered native callback }
+        '400': { $ref: '#/components/responses/Error' }
+  /auth/native/login:
+    post:
+      operationId: loginNativeLocal
+      requestBody: { $ref: '#/components/requestBodies/LocalLogin' }
+      responses:
+        '201': { $ref: '#/components/responses/NativeSession' }
+        '401': { $ref: '#/components/responses/Error' }
+  /auth/native/exchange:
+    post:
+      operationId: exchangeNativeOIDCCode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+      responses:
+        '201': { $ref: '#/components/responses/NativeSession' }
+        '401': { $ref: '#/components/responses/Error' }
+  /auth/native/logout:
+    post:
+      operationId: logoutNative
+      security: [{ nativeBearer: [] }]
+      responses:
+        '204': { description: Native session revoked }
+        '401': { $ref: '#/components/responses/Error' }
+  /me:
+    get:
+      operationId: getCurrentUser
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/WebSession' }
+        '401': { $ref: '#/components/responses/Error' }
+  /infrastructure:
+    get:
+      operationId: getInfrastructure
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200':
+          description: Normalized PVE inventory
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Infrastructure' }
+        '401': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /platform-config:
+    get:
+      operationId: getPlatformConfig
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200':
+          description: Managed OS image profiles, GPU profiles, and discovered PVE graphics devices
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlatformConfig' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /access-control:
+    get:
+      operationId: getAccessControl
+      description: Lists users, AI Agent principals, registered managed desktops, and explicit assignments. Platform administrators only.
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200':
+          description: Current desktop authorization model
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccessControl' }
+        '403': { $ref: '#/components/responses/Error' }
+  /access-control/reconcile:
+    post:
+      operationId: reconcileManagedDesktops
+      description: Reconciles the desktop registry from live, non-template QEMU VMs carrying the vc-vdi PVE tag.
+      security: [{ cookieAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/CSRFToken' }]
+      responses:
+        '200':
+          description: Reconciled authorization model
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccessControl' }
+        '403': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+  /users:
+    post:
+      operationId: createLocalUser
+      security: [{ cookieAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/CSRFToken' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              additionalProperties: false
+              properties:
+                username: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$' }
+                display_name: { type: string, maxLength: 128 }
+                password: { type: string, minLength: 12, maxLength: 128, writeOnly: true }
+      responses:
+        '201':
+          description: Local user created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserAccount' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /users/{id}:
+    patch:
+      operationId: updateUser
+      description: Enables or disables a user. Disabling revokes their Web and native sessions.
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/CSRFToken' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [disabled]
+              additionalProperties: false
+              properties:
+                disabled: { type: boolean }
+      responses:
+        '200':
+          description: Updated user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserAccount' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /agents:
+    post:
+      operationId: createAgentPrincipal
+      description: Creates one AI Agent principal and returns its credential once.
+      security: [{ cookieAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/CSRFToken' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, display_name]
+              additionalProperties: false
+              properties:
+                id: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$' }
+                display_name: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        '201':
+          description: Agent and one-time credential
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentCredential' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /agents/{id}:
+    patch:
+      operationId: updateAgentPrincipal
+      description: Enables or disables an AI Agent. Disabling immediately revokes active leases.
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/CSRFToken' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              additionalProperties: false
+              properties:
+                enabled: { type: boolean }
+      responses:
+        '200':
+          description: Updated Agent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentPrincipal' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /agents/{id}/token:
+    post:
+      operationId: rotateAgentCredential
+      description: Replaces the AI Agent credential and returns the new value once.
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/CSRFToken' }
+      responses:
+        '200':
+          description: Rotated one-time Agent credential
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentCredential' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /desktop-assignments/{subject_type}/{subject_id}/{vmid}:
+    parameters:
+      - { in: path, name: subject_type, required: true, schema: { type: string, enum: [user, agent] } }
+      - { in: path, name: subject_id, required: true, schema: { type: string } }
+      - { in: path, name: vmid, required: true, schema: { type: integer, minimum: 1 } }
+      - { $ref: '#/components/parameters/CSRFToken' }
+    put:
+      operationId: assignDesktop
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200':
+          description: Desktop assigned, or an existing identical assignment returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DesktopAssignment' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: removeDesktopAssignment
+      description: Removes access. Removing an Agent assignment immediately revokes its active lease for that desktop.
+      security: [{ cookieAuth: [] }]
+      responses:
+        '204': { description: Assignment removed }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /image-profiles/{id}:
+    patch:
+      operationId: updateImageProfile
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/CSRFToken' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ImageProfileUpdate' }
+      responses:
+        '200':
+          description: Updated image profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImageProfile' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /image-profiles/{id}/builds:
+    post:
+      operationId: startImageBuild
+      description: Starts the fixed Packer definition for an image profile. Build secrets are accepted once and are never persisted in the job request.
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/CSRFToken' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ImageBuildStart' }
+      responses:
+        '202':
+          description: Image build accepted or the matching active build returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /gpu-profiles/{id}:
+    patch:
+      operationId: updateGPUProfile
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/CSRFToken' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name: { type: string, minLength: 1, maxLength: 80 }
+                resource_mapping: { type: string, maxLength: 64 }
+                enabled: { type: boolean }
+      responses:
+        '200':
+          description: Updated GPU profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GPUProfile' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /pci-resource-mappings:
+    post:
+      operationId: createPCIResourceMapping
+      description: Creates a PVE PCI Resource Mapping for either full passthrough or mediated devices after validating live GPU capabilities.
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/CSRFToken' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PCIResourceMappingInput' }
+      responses:
+        '201':
+          description: Created PCI Resource Mapping
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PCIResourceMapping' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /pci-resource-mappings/{id}:
+    put:
+      operationId: updatePCIResourceMapping
+      description: Replaces the node/device entries of an existing PVE PCI Resource Mapping after validating the live GPU inventory.
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, pattern: '^[A-Za-z][A-Za-z0-9_-]{0,63}$' } }
+        - { $ref: '#/components/parameters/CSRFToken' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PCIResourceMappingUpdateInput'
+      responses:
+        '200':
+          description: Updated PCI Resource Mapping
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PCIResourceMapping' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /desktop-instances:
+    post:
+      operationId: createDesktopInstance
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/CSRFToken' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, source_vmid, target_node, storage, full, gpu_profile_id]
+              properties:
+                name: { type: string, pattern: '^vc-vdi-[a-zA-Z0-9-]*$', maxLength: 63 }
+                source_vmid: { type: integer, minimum: 1 }
+                target_node: { type: string }
+                storage: { type: string, description: Empty for linked clone default }
+                full: { type: boolean }
+                gpu_profile_id: { type: string, description: Enabled GPU profile; use none for a CPU-only desktop }
+      responses:
+        '202': { $ref: '#/components/responses/Job' }
+        '403': { $ref: '#/components/responses/Error' }
+  /jobs/{id}:
+    get:
+      operationId: getJob
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses:
+        '200': { $ref: '#/components/responses/Job' }
+        '404': { $ref: '#/components/responses/Error' }
+  /jobs:
+    get:
+      operationId: listJobs
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        '200':
+          description: Recent asynchronous tasks, newest first
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobList' }
+  /audit-events:
+    get:
+      operationId: listAuditEvents
+      description: Lists immutable audit events for platform administrators. Results are newest first and details are redacted before persistence.
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 30 } }
+        - { in: query, name: cursor, schema: { type: string, pattern: '^[1-9][0-9]*$' } }
+        - { in: query, name: outcome, schema: { type: string, enum: [success, failure] } }
+        - { in: query, name: q, schema: { type: string, maxLength: 128 } }
+      responses:
+        '200':
+          description: One cursor page of audit events
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditEventPage' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /virtual-machines/{vmid}/actions/{action}:
+    post:
+      operationId: changeVirtualMachinePower
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { in: path, name: vmid, required: true, schema: { type: integer, minimum: 1 } }
+        - { in: path, name: action, required: true, schema: { type: string, enum: [start, stop] } }
+        - { $ref: '#/components/parameters/CSRFToken' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '202': { $ref: '#/components/responses/Job' }
+        '409': { $ref: '#/components/responses/Error' }
+  /virtual-machines/{vmid}/access-policy:
+    parameters:
+      - { in: path, name: vmid, required: true, schema: { type: integer, minimum: 1 } }
+    get:
+      operationId: getDesktopAccessPolicy
+      description: Reads the desired and last applied local privilege state for a managed desktop.
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200':
+          description: Desktop access policy
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DesktopAccessPolicy' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+    put:
+      operationId: updateDesktopAccessPolicy
+      description: Saves a fixed local privilege mode and applies it immediately through QEMU Guest Agent when the VM is running. A stopped VM remains pending until connection.
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/CSRFToken' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [privilege_mode]
+              additionalProperties: false
+              properties:
+                privilege_mode: { type: string, enum: [standard, local_admin] }
+      responses:
+        '200':
+          description: Saved policy and its current enforcement state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DesktopAccessPolicy' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /native/desktops:
+    get:
+      operationId: listNativeDesktops
+      security: [{ nativeBearer: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/DesktopList' }
+        '401': { $ref: '#/components/responses/Error' }
+  /native/desktops/{vmid}/actions/{action}:
+    post:
+      operationId: changeNativeDesktopPower
+      security: [{ nativeBearer: [] }]
+      parameters:
+        - { in: path, name: vmid, required: true, schema: { type: integer, minimum: 1 } }
+        - { in: path, name: action, required: true, schema: { type: string, enum: [start, stop] } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '202': { $ref: '#/components/responses/Job' }
+        '401': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /native/desktops/{vmid}/connections:
+    post:
+      operationId: createNativeDesktopConnection
+      description: Enforces the desired desktop access policy, then creates an RDP connection descriptor and rotates the guest desktop password for each issuance.
+      security: [{ nativeBearer: [] }]
+      parameters:
+        - { in: path, name: vmid, required: true, schema: { type: integer, minimum: 1 } }
+      responses:
+        '201':
+          description: RDP connection descriptor. The response must not be cached or logged.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DesktopConnection' }
+        '401': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /agent/desktops:
+    get:
+      operationId: listAgentDesktops
+      security: [{ internalBearer: [] }]
+      parameters:
+        - { in: query, name: agent_id, required: true, schema: { type: string } }
+      responses:
+        '200': { $ref: '#/components/responses/DesktopList' }
+        '401': { $ref: '#/components/responses/Error' }
+  /agent/authenticate:
+    post:
+      operationId: authenticateAgentCredential
+      description: Internal MCP-to-control-plane exchange that resolves an enabled Agent principal from its opaque credential.
+      security: [{ internalBearer: [] }]
+      parameters:
+        - in: header
+          name: X-VC-Workspace-Agent-Token
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 512, writeOnly: true }
+      responses:
+        '200':
+          description: Authenticated Agent principal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentPrincipal' }
+        '401': { $ref: '#/components/responses/Error' }
+  /agent/desktop-leases:
+    post:
+      operationId: createAgentDesktopLease
+      security: [{ internalBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agent_id, desktop_vmid]
+              properties:
+                agent_id: { type: string, minLength: 3, maxLength: 128 }
+                desktop_vmid: { type: integer, minimum: 1 }
+                ttl_seconds: { type: integer, minimum: 60, maximum: 3600, default: 900 }
+      responses:
+        '201': { $ref: '#/components/responses/DesktopLease' }
+        '409': { $ref: '#/components/responses/Error' }
+  /agent/desktop-leases/{id}:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: string } }
+      - { in: query, name: agent_id, required: true, schema: { type: string } }
+    get:
+      operationId: getAgentDesktopLease
+      security: [{ internalBearer: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/DesktopLease' }
+        '404': { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: releaseAgentDesktopLease
+      security: [{ internalBearer: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/DesktopLease' }
+        '409': { $ref: '#/components/responses/Error' }
+  /agent/desktop-leases/{id}/actions/{action}:
+    post:
+      operationId: changeAgentDesktopPower
+      security: [{ internalBearer: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+        - { in: path, name: action, required: true, schema: { type: string, enum: [start, stop] } }
+        - { in: query, name: agent_id, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '202': { $ref: '#/components/responses/Job' }
+        '409': { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: vc_vdi_session
+    nativeBearer:
+      type: http
+      scheme: bearer
+      description: Revocable native client session
+    internalBearer:
+      type: http
+      scheme: bearer
+      description: Internal service token used by the MCP server
+  parameters:
+    CSRFToken:
+      in: header
+      name: X-CSRF-Token
+      required: true
+      schema: { type: string }
+    IdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: true
+      schema: { type: string, minLength: 8, maxLength: 128 }
+  requestBodies:
+    LocalLogin:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [username, password]
+            properties:
+              username: { type: string }
+              password: { type: string }
+  responses:
+    Error:
+      description: Request failed
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    WebSession:
+      description: Web session created or read
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/WebSession' }
+    NativeSession:
+      description: Native client session created
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/NativeSession' }
+    Job:
+      description: Asynchronous PVE job
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Job' }
+    DesktopLease:
+      description: Agent desktop lease
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/DesktopLease' }
+    DesktopList:
+      description: Managed desktops
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/DesktopList' }
+  schemas:
+    System:
+      type: object
+      required: [name, pve_configured, database_configured, initialized, oidc_configured, oidc_name, uptime_seconds]
+      properties:
+        name: { type: string }
+        pve_configured: { type: boolean }
+        database_configured: { type: boolean }
+        initialized: { type: boolean }
+        oidc_configured: { type: boolean }
+        oidc_name: { type: string }
+        uptime_seconds: { type: integer, minimum: 0 }
+    User:
+      type: object
+      required: [id, username, display_name, role]
+      properties:
+        id: { type: string }
+        username: { type: string }
+        display_name: { type: string }
+        role: { type: string, enum: [platform_admin, user] }
+    UserAccount:
+      type: object
+      required: [id, username, display_name, role, disabled, identity_kind, created_at]
+      properties:
+        id: { type: string }
+        username: { type: string }
+        display_name: { type: string }
+        role: { type: string, enum: [platform_admin, user] }
+        disabled: { type: boolean }
+        identity_kind: { type: string, enum: [local, oidc] }
+        created_at: { type: string, format: date-time }
+    AgentPrincipal:
+      type: object
+      required: [id, display_name, enabled, created_at, updated_at]
+      properties:
+        id: { type: string }
+        display_name: { type: string }
+        enabled: { type: boolean }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        last_used_at: { type: string, format: date-time }
+    AgentCredential:
+      type: object
+      required: [agent, access_token]
+      properties:
+        agent: { $ref: '#/components/schemas/AgentPrincipal' }
+        access_token: { type: string, writeOnly: true, pattern: '^vcwa_' }
+    ManagedDesktop:
+      type: object
+      required: [vmid, display_name, node, present, enabled, first_seen_at, last_seen_at, updated_at]
+      properties:
+        vmid: { type: integer, minimum: 1 }
+        display_name: { type: string }
+        node: { type: string }
+        present: { type: boolean }
+        enabled: { type: boolean }
+        first_seen_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    DesktopAssignment:
+      type: object
+      required: [subject_type, subject_id, desktop_vmid]
+      properties:
+        subject_type: { type: string, enum: [user, agent] }
+        subject_id: { type: string }
+        desktop_vmid: { type: integer, minimum: 1 }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+    AccessControl:
+      type: object
+      required: [users, agents, desktops, assignments]
+      properties:
+        users:
+          type: array
+          items: { $ref: '#/components/schemas/UserAccount' }
+        agents:
+          type: array
+          items: { $ref: '#/components/schemas/AgentPrincipal' }
+        desktops:
+          type: array
+          items: { $ref: '#/components/schemas/ManagedDesktop' }
+        assignments:
+          type: array
+          items: { $ref: '#/components/schemas/DesktopAssignment' }
+    WebSession:
+      type: object
+      required: [user, csrf_token]
+      properties:
+        user: { $ref: '#/components/schemas/User' }
+        csrf_token: { type: string }
+    NativeSession:
+      type: object
+      required: [access_token, token_type, expires_at, user]
+      properties:
+        access_token: { type: string }
+        token_type: { type: string, const: Bearer }
+        expires_at: { type: string, format: date-time }
+        user: { $ref: '#/components/schemas/User' }
+    Infrastructure:
+      type: object
+      required: [version, cluster, nodes, virtual_machines, storage, mutations_enabled]
+      properties:
+        version:
+          type: object
+          required: [version, release]
+          properties:
+            version: { type: string }
+            release: { type: string }
+        cluster:
+          type: object
+          required: [name, quorate, node_count]
+          properties:
+            name: { type: string }
+            quorate: { type: boolean }
+            node_count: { type: integer }
+        nodes:
+          type: array
+          items: { $ref: '#/components/schemas/Node' }
+        virtual_machines:
+          type: array
+          items: { $ref: '#/components/schemas/VirtualMachine' }
+        storage:
+          type: array
+          items: { $ref: '#/components/schemas/Storage' }
+        mutations_enabled: { type: boolean }
+    PlatformConfig:
+      type: object
+      required: [image_profiles, gpu_profiles, gpu_devices, pci_resource_mappings, gpu_inventory_available, gpu_mapping_inventory_available, image_builder_available, image_builds]
+      properties:
+        image_profiles:
+          type: array
+          items: { $ref: '#/components/schemas/ImageProfile' }
+        gpu_profiles:
+          type: array
+          items: { $ref: '#/components/schemas/GPUProfile' }
+        gpu_devices:
+          type: array
+          items: { $ref: '#/components/schemas/GPUDevice' }
+        pci_resource_mappings:
+          type: array
+          items: { $ref: '#/components/schemas/PCIResourceMapping' }
+        gpu_inventory_available: { type: boolean }
+        gpu_mapping_inventory_available: { type: boolean }
+        image_builder_available: { type: boolean }
+        image_builds:
+          type: array
+          items: { $ref: '#/components/schemas/Job' }
+    ImageProfile:
+      type: object
+      required: [id, display_name, os_family, os_version, architecture, lifecycle, enabled, source_node, source_iso, source_iso_checksum, driver_iso, driver_iso_checksum, mirror_url, security_mirror_url, storage_pool, bridge, windows_image_name, default_cores, default_memory_mb, default_disk_gb, firmware, tpm_version, agent_kind, desktop_protocol, default_gpu_profile_id, build_status, status_detail, updated_at]
+      properties:
+        id: { type: string }
+        display_name: { type: string }
+        os_family: { type: string, enum: [linux, windows] }
+        os_version: { type: string }
+        architecture: { type: string, const: amd64 }
+        lifecycle: { type: string, enum: [supported, legacy] }
+        enabled: { type: boolean }
+        source_node: { type: string }
+        source_iso: { type: string }
+        source_iso_checksum: { type: string }
+        driver_iso: { type: string }
+        driver_iso_checksum: { type: string }
+        template_vmid: { type: integer, minimum: 1 }
+        mirror_url: { type: string }
+        security_mirror_url: { type: string }
+        storage_pool: { type: string }
+        bridge: { type: string }
+        windows_image_name: { type: string }
+        default_cores: { type: integer, minimum: 1, maximum: 256 }
+        default_memory_mb: { type: integer, minimum: 512, maximum: 1048576 }
+        default_disk_gb: { type: integer, minimum: 8, maximum: 16384 }
+        firmware: { type: string, enum: [seabios, uefi] }
+        tpm_version: { type: string, enum: [none, '2.0'] }
+        agent_kind: { type: string, enum: [linux, windows] }
+        desktop_protocol: { type: string, const: rdp }
+        default_gpu_profile_id: { type: string }
+        build_status: { type: string, enum: [draft, blocked, building, testing, ready, failed] }
+        status_detail: { type: string }
+        updated_at: { type: string, format: date-time }
+    ImageProfileUpdate:
+      type: object
+      properties:
+        display_name: { type: string, minLength: 1, maxLength: 80 }
+        enabled: { type: boolean }
+        source_node: { type: string }
+        source_iso: { type: string }
+        source_iso_checksum: { type: string }
+        driver_iso: { type: string }
+        driver_iso_checksum: { type: string }
+        template_vmid: { type: integer, minimum: 0 }
+        mirror_url: { type: string }
+        security_mirror_url: { type: string }
+        storage_pool: { type: string }
+        bridge: { type: string }
+        windows_image_name: { type: string, maxLength: 100 }
+        default_cores: { type: integer, minimum: 1, maximum: 256 }
+        default_memory_mb: { type: integer, minimum: 512, maximum: 1048576 }
+        default_disk_gb: { type: integer, minimum: 8, maximum: 16384 }
+        firmware: { type: string, enum: [seabios, uefi] }
+        tpm_version: { type: string, enum: [none, '2.0'] }
+        default_gpu_profile_id: { type: string }
+        build_status: { type: string, enum: [draft, blocked, building, testing, ready, failed] }
+        status_detail: { type: string, maxLength: 500 }
+    ImageBuildStart:
+      type: object
+      required: [profile, builder_password]
+      additionalProperties: false
+      properties:
+        profile: { $ref: '#/components/schemas/ImageProfileUpdate' }
+        builder_password:
+          type: string
+          minLength: 12
+          maxLength: 128
+          writeOnly: true
+        windows_product_key:
+          type: string
+          maxLength: 100
+          writeOnly: true
+    GPUProfile:
+      type: object
+      required: [id, display_name, mode, vendor_id, device_class, resource_mapping, mdev_type, enabled, exclusive, allow_live_migration, updated_at]
+      properties:
+        id: { type: string }
+        display_name: { type: string }
+        mode: { type: string, enum: [none, pci_passthrough, sriov, mdev] }
+        vendor_id: { type: string }
+        device_class: { type: string }
+        resource_mapping: { type: string }
+        mdev_type: { type: string, description: PVE mediated-device type; empty for non-mdev profiles }
+        enabled: { type: boolean }
+        exclusive: { type: boolean }
+        allow_live_migration: { type: boolean }
+        updated_at: { type: string, format: date-time }
+    GPUDevice:
+      type: object
+      required: [node, id, vendor_id, device_id, vendor_name, device_name, class, mdev_capable, mdev_types, assignable]
+      properties:
+        node: { type: string }
+        id: { type: string }
+        vendor_id: { type: string }
+        device_id: { type: string }
+        subsystem_vendor_id: { type: string }
+        subsystem_device_id: { type: string }
+        vendor_name: { type: string }
+        device_name: { type: string }
+        class: { type: string }
+        iommu_group: { type: integer }
+        mdev_capable: { type: boolean }
+        mdev_types:
+          type: array
+          items: { $ref: '#/components/schemas/MDevType' }
+        assignable: { type: boolean }
+    MDevType:
+      type: object
+      required: [type, name, available, description]
+      properties:
+        type: { type: string }
+        name: { type: string }
+        available: { type: integer, minimum: 0 }
+        description: { type: string }
+    PCIResourceMapping:
+      type: object
+      required: [id, description, mdev, entries]
+      properties:
+        id: { type: string }
+        description: { type: string }
+        mdev: { type: boolean }
+        entries:
+          type: array
+          items:
+            type: object
+            required: [node, device_id, device_paths, hardware_id]
+            properties:
+              node: { type: string }
+              device_id: { type: string }
+              device_paths:
+                type: array
+                items: { type: string }
+              hardware_id: { type: string, description: PCI vendor and device identity }
+              subsystem_id: { type: string }
+              iommu_group: { type: string }
+    PCIResourceMappingInput:
+      type: object
+      required: [id, description, mdev, entries]
+      additionalProperties: false
+      properties:
+        id: { type: string, pattern: '^[A-Za-z][A-Za-z0-9_-]{0,63}$' }
+        description: { type: string, maxLength: 256 }
+        mdev: { type: boolean }
+        entries:
+          type: array
+          minItems: 1
+          maxItems: 64
+          items:
+            type: object
+            required: [node, device_id]
+            additionalProperties: false
+            properties:
+              node: { type: string }
+              device_id: { type: string }
+    PCIResourceMappingUpdateInput:
+      type: object
+      required: [description, mdev, entries]
+      additionalProperties: false
+      properties:
+        description: { type: string, maxLength: 256 }
+        mdev: { type: boolean }
+        entries:
+          type: array
+          minItems: 1
+          maxItems: 64
+          items:
+            type: object
+            required: [node, device_id]
+            additionalProperties: false
+            properties:
+              node: { type: string }
+              device_id: { type: string }
+    Node:
+      type: object
+      required: [name, status, cpu_usage, cpu_count, memory_used, memory_total]
+      properties:
+        name: { type: string }
+        status: { type: string }
+        cpu_usage: { type: number }
+        cpu_count: { type: integer }
+        memory_used: { type: integer }
+        memory_total: { type: integer }
+    VirtualMachine:
+      type: object
+      required: [vmid, name, kind, node, status, template, managed, cpu_count, memory_total]
+      properties:
+        vmid: { type: integer }
+        name: { type: string }
+        kind: { type: string }
+        node: { type: string }
+        status: { type: string }
+        template: { type: boolean }
+        managed: { type: boolean, description: Whether VC Workspace permits desktop lifecycle operations for this non-template QEMU VM, derived from the vc-vdi PVE tag }
+        cpu_count: { type: integer }
+        memory_total: { type: integer }
+    DesktopList:
+      type: object
+      required: [desktops]
+      properties:
+        desktops:
+          type: array
+          items: { $ref: '#/components/schemas/VirtualMachine' }
+    DesktopConnection:
+      type: object
+      required: [id, protocol, host, port, username, password, issued_at, desktop_id]
+      properties:
+        id: { type: string }
+        protocol: { type: string, const: rdp }
+        host: { type: string }
+        port: { type: integer, const: 3389 }
+        username: { type: string }
+        password: { type: string, writeOnly: true }
+        issued_at: { type: string, format: date-time }
+        desktop_id: { type: string }
+    DesktopAccessPolicy:
+      type: object
+      required: [vmid, privilege_mode, desired_revision, applied_revision, state, os_family, updated_at]
+      properties:
+        vmid: { type: integer, minimum: 1 }
+        privilege_mode: { type: string, enum: [standard, local_admin] }
+        desired_revision: { type: integer, minimum: 1 }
+        applied_revision: { type: integer, minimum: 0 }
+        state: { type: string, enum: [pending, applied, failed] }
+        os_family: { type: string, enum: [linux, windows, unknown] }
+        last_error: { type: string }
+        updated_at: { type: string, format: date-time }
+    AuditEvent:
+      type: object
+      required: [id, event_type, outcome, detail, occurred_at]
+      properties:
+        id: { type: string, pattern: '^[1-9][0-9]*$' }
+        actor_id: { type: string }
+        actor_username: { type: string }
+        actor_display_name: { type: string }
+        event_type: { type: string }
+        outcome: { type: string, enum: [success, failure] }
+        target_type: { type: string }
+        target_id: { type: string }
+        detail: { type: object, additionalProperties: true }
+        occurred_at: { type: string, format: date-time }
+    AuditEventPage:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          items: { $ref: '#/components/schemas/AuditEvent' }
+        next_cursor: { type: string, pattern: '^[1-9][0-9]*$' }
+    Storage:
+      type: object
+      required: [name, kind, content, shared]
+      properties:
+        name: { type: string }
+        kind: { type: string }
+        content: { type: string }
+        shared: { type: boolean }
+    Job:
+      type: object
+      required: [id, operation, state, request, progress, created_by, created_at, updated_at]
+      properties:
+        id: { type: string }
+        operation: { type: string }
+        state: { type: string, enum: [accepted, running, succeeded, failed] }
+        source_vmid: { type: integer }
+        target_vmid: { type: integer }
+        target_node: { type: string }
+        upid: { type: string }
+        request: { type: object, additionalProperties: true }
+        progress: { type: integer, minimum: 0, maximum: 100 }
+        detail: { type: string }
+        error: { type: string }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    JobList:
+      type: object
+      required: [jobs]
+      properties:
+        jobs:
+          type: array
+          items: { $ref: '#/components/schemas/Job' }
+    DesktopLease:
+      type: object
+      required: [id, agent_id, desktop_id, state, control_epoch, expires_at, created_at, updated_at]
+      properties:
+        id: { type: string }
+        agent_id: { type: string }
+        desktop_id: { type: string }
+        state: { type: string, enum: [active, released, expired, revoked] }
+        control_epoch: { type: integer, minimum: 1 }
+        expires_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }

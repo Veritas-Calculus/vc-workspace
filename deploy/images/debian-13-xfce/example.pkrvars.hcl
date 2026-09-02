@@ -1,0 +1,17 @@
+pve_url          = "https://pve.example.com:8006/api2/json"
+pve_username     = "vc-vdi-builder@pve!packer"
+pve_token        = "replace-with-token-secret"
+pve_password     = ""
+pve_node         = "infra-node1"
+vm_id            = 9100
+template_name    = "vc-vdi-debian-13-xfce"
+iso_file         = "local:iso/debian-13.6.0-amd64-netinst.iso"
+iso_checksum     = "sha256:65273beed27b2df543b68b65630ba525cfbad8df2b12035732b2dff87d6664e7"
+storage_pool     = "ceph-pve"
+bridge           = "vmbr0"
+cores            = 4
+memory_mb        = 4096
+disk_size        = "32G"
+firmware         = "seabios"
+builder_password = "replace-with-one-time-build-password"
+agent_binary     = "../../../dist/vc-vdi-guest-agent-linux-amd64"

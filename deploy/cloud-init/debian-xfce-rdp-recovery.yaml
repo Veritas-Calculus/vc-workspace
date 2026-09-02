@@ -1,0 +1,73 @@
+#cloud-config
+package_update: false
+package_upgrade: false
+
+write_files:
+  - path: /usr/local/sbin/vc-vdi-recover-desktop
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      exec > >(tee -a /var/log/vc-vdi-recovery.log) 2>&1
+      export DEBIAN_FRONTEND=noninteractive
+      export NEEDRESTART_MODE=a
+      apt_options=(-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
+
+      install -d -m 0755 /var/lib/vc-vdi
+      rm -f /var/lib/vc-vdi/desktop-ready /var/lib/vc-vdi/recovery-complete
+
+      for source_file in /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list; do
+        [ -e "$source_file" ] || continue
+        case "$source_file" in
+          *.vc-vdi-disabled) continue ;;
+        esac
+        mv "$source_file" "$source_file.vc-vdi-disabled"
+      done
+      cat >/etc/apt/sources.list <<'SOURCES'
+      deb http://10.31.0.2/debian trixie main contrib non-free-firmware
+      deb http://10.31.0.2/debian trixie-updates main contrib non-free-firmware
+      deb http://10.31.0.2/debian-security trixie-security main contrib non-free-firmware
+      SOURCES
+
+      dpkg --configure -a || true
+      apt-get "${apt_options[@]}" --fix-broken install -y
+      dpkg --configure -a
+      apt-get update
+      apt-get "${apt_options[@]}" install --reinstall -y qemu-guest-agent
+      apt-get "${apt_options[@]}" install -y --no-install-recommends \
+        dbus-x11 \
+        xfce4-panel \
+        xfce4-session \
+        xfce4-terminal \
+        xfdesktop4 \
+        xfwm4 \
+        xorgxrdp \
+        xrdp
+
+      . /etc/os-release
+      test "${VERSION_CODENAME:-}" = trixie
+
+      if ! id vdi >/dev/null 2>&1; then
+        useradd --create-home --shell /bin/bash vdi
+      fi
+      install -d -o vdi -g vdi /home/vdi
+      printf 'startxfce4\n' >/home/vdi/.xsession
+      chown vdi:vdi /home/vdi/.xsession
+      chmod 0600 /home/vdi/.xsession
+      usermod -aG ssl-cert,audio,video vdi
+      usermod -aG ssl-cert xrdp
+
+      systemctl daemon-reload
+      systemctl enable qemu-guest-agent xrdp vc-vdi-readiness.service
+      systemctl restart qemu-guest-agent
+      systemctl restart xrdp
+      systemctl restart vc-vdi-readiness.service
+      systemctl is-active --quiet qemu-guest-agent
+      systemctl is-active --quiet xrdp
+      test -f /var/lib/vc-vdi/desktop-ready
+      printf 'ready\n' >/var/lib/vc-vdi/recovery-complete
+
+runcmd:
+  - [bash, /usr/local/sbin/vc-vdi-recover-desktop]
+
+final_message: VC Workspace Debian 13 desktop recovery completed
