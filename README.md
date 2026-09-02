@@ -68,3 +68,7 @@ pnpm dev
 - `docs/architecture/` 只描述当前采用的系统，不保留已否决方案的长篇副本。
 - 被替代的决定在 ADR 中标记 `Superseded`，不复制一份“新版说明”。
 - 每个功能变更必须在同一提交中更新对应文档和 OpenAPI。
+
+## 许可证
+
+[Apache License 2.0](LICENSE)。该许可证允许商业使用、修改和闭源分发，同时包含明确的专利授权和商标限制条款。贡献方式见 [贡献指南](CONTRIBUTING.md)，漏洞报告见 [安全策略](SECURITY.md)。

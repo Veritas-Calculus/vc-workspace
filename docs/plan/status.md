@@ -31,7 +31,7 @@ VC Workspace 已完成面向人的核心纵向闭环：管理员可以初始化�
 | 会话管控 | 已排期 | 已有 Guest 权限策略，不等同于会话数据防泄漏 | M11 剪贴板/文件/磁盘重定向/背景；M12 水印与更多设备通道 |
 | Kubernetes | 已实现，待集群验收 | 非特权镜像、Kustomize、探针、Secret 分界、NetworkPolicy 和单一 HTTPS 入口 | 目标集群 rollout、TLS、存储、备份、真实网络策略和 Builder Worker |
 | Windows/Linux 客户端 | 未开始 | 仅保留目录和跨平台 Session Core 边界 | WinUI 与 GTK4 客户端的登录、桌面库、数据面和发布链 |
-| 开源发布 | 未开始 | GitHub `origin` 已配置，Landing 已指向固定仓库地址 | 当前仓库尚无首个 commit、LICENSE、贡献指南、安全策略或 Release |
+| 开源发布 | 进行中 | 已建立首个 commit；许可证定为 Apache-2.0，`LICENSE`、`CONTRIBUTING.md` 与 `SECURITY.md` 就位；Landing 已指向固定仓库地址 | 尚未 push 到远端，远端 GitHub Actions 未验证，也没有 Release |
 
 ## TODO
 
@@ -39,7 +39,7 @@ VC Workspace 已完成面向人的核心纵向闭环：管理员可以初始化�
 
 | ID | 优先级 | 状态 | 任务 | 完成条件 |
 |---|---|---|---|---|
-| RELEASE-01 | P0 | 待决策 | 建立开源仓库基线 | 选定许可证；补齐 `LICENSE`、`CONTRIBUTING.md`、`SECURITY.md`；创建首个 commit 并 push；GitHub Actions 在远端通过。不能替用户选择许可证 |
+| RELEASE-01 | P0 | 进行中 | 建立开源仓库基线 | 许可证已定为 Apache-2.0，`LICENSE`、`CONTRIBUTING.md`、`SECURITY.md` 和首个 commit 已完成；剩余条件是确定版权归属主体、清理文档中的内网拓扑、push 到远端并让 GitHub Actions 在远端通过 |
 | AI-01 | P0 | 待开发 | MCP Computer Use 最小纵向切片 | Agent 在有效 Lease 和当前 `control_epoch` 内获取截图/可访问性快照并执行受控键盘、鼠标和文本输入；人工接管立即使旧控制权失效；每个动作有审计和有界超时；Debian 13 与 Windows 11 各完成一条真实任务 |
 | POLICY-01 | P0 | 待开发 | 完成 M11 会话策略基础 | 数据模型、作用域解析、签名快照、Web 管理、macOS/Guest 执行端和审计完成；剪贴板、文件/磁盘重定向及受管背景在 Debian 13/Windows 上实测，强制策略未应用时拒绝建联 |
 | IMAGE-01 | P0 | 待实测 | 通过 Web 完成模板 Bootstrap 闭环 | 使用未占用 VMID 从 Web 构建 Debian 13 与 Windows 11，完成模板转换、完整克隆、Agent/QGA/RDP 验收后手工切到 `ready`；Windows 10 是否生产启用由介质支持与授权决定 |
@@ -58,7 +58,7 @@ VC Workspace 已完成面向人的核心纵向闭环：管理员可以初始化�
 
 ## 需要用户或环境提供的决定
 
-- 开源许可证；在选定前不能生成或宣称许可证。
+- 公开发布时的版权归属主体：仓库组织 `Veritas-Calculus`、Go 模块路径中的 `virtual-cable` 与提交作者三者当前不一致，需确定写入版权声明的名称。
 - Kubernetes 的镜像仓库、公开域名/TLS、StorageClass、Namespace 和数据库备份方案。
 - 用于验收的 OIDC Provider、Client Registration 与回调域名。
 - Windows 10/11 的授权介质和生产支持策略，尤其是已经结束普通支持的 Windows 10 22H2。
