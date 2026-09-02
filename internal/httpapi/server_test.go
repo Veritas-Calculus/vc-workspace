@@ -40,9 +40,9 @@ func TestReadyRequiresDatabase(t *testing.T) {
 
 func TestRequestSourceIPUsesPeerAddressOnly(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
-	request.RemoteAddr = "[::ffff:10.31.0.42]:43210"
+	request.RemoteAddr = "[::ffff:192.0.2.42]:43210"
 	request.Header.Set("X-Forwarded-For", "203.0.113.9")
-	if actual := requestSourceIP(request); actual != "10.31.0.42" {
+	if actual := requestSourceIP(request); actual != "192.0.2.42" {
 		t.Fatalf("requestSourceIP()=%q, want trusted peer address", actual)
 	}
 }
@@ -170,7 +170,7 @@ func TestReadDesktopReadySupportsLegacyWindowsMarker(t *testing.T) {
 
 func TestValidateImageProfileRequiresTemplateForReadyState(t *testing.T) {
 	profile := store.ImageProfile{
-		DisplayName: "Debian 13 · XFCE", BuildStatus: "ready", MirrorURL: "http://10.31.0.2/debian",
+		DisplayName: "Debian 13 · XFCE", BuildStatus: "ready", MirrorURL: "http://mirror.example.com/debian",
 		DefaultGPUProfileID: "none", DefaultCores: 4, DefaultMemoryMB: 4096, DefaultDiskGB: 32,
 		Firmware: "seabios", TPMVersion: "none",
 	}
@@ -185,7 +185,7 @@ func TestValidateImageProfileRequiresTemplateForReadyState(t *testing.T) {
 
 func TestValidateImageProfileRejectsCredentialsInMirrorURL(t *testing.T) {
 	profile := store.ImageProfile{
-		DisplayName: "Debian 13 · XFCE", BuildStatus: "testing", MirrorURL: "http://user:pass@10.31.0.2/debian",
+		DisplayName: "Debian 13 · XFCE", BuildStatus: "testing", MirrorURL: "http://user:pass@mirror.example.com/debian",
 		DefaultGPUProfileID: "none", DefaultCores: 4, DefaultMemoryMB: 4096, DefaultDiskGB: 32,
 		Firmware: "seabios", TPMVersion: "none",
 	}
@@ -386,7 +386,7 @@ func TestImageBuildRequestCarriesParameterizedProfile(t *testing.T) {
 	profile := store.ImageProfile{
 		ID: "debian-13-xfce", SourceNode: "infra-node6", TemplateVMID: 9200,
 		SourceISO: "local:iso/debian.iso", SourceISOChecksum: "sha256:abc",
-		MirrorURL: "http://10.31.0.2/debian", SecurityMirrorURL: "http://10.31.0.2/debian-security",
+		MirrorURL: "http://mirror.example.com/debian", SecurityMirrorURL: "http://mirror.example.com/debian-security",
 		StoragePool: "ceph-pve", Bridge: "vmbr0", DefaultCores: 6, DefaultMemoryMB: 6144, DefaultDiskGB: 48,
 		Firmware: "seabios", TPMVersion: "none",
 	}
@@ -400,7 +400,7 @@ func TestPrepareImageBuildProfileDoesNotDemoteCurrentProfileBeforeValidation(t *
 	original := store.ImageProfile{
 		ID: "debian-13-xfce", DisplayName: "Debian 13 · XFCE", Enabled: true, BuildStatus: "ready", StatusDetail: "validated",
 		SourceNode: "infra-node6", SourceISO: "local:iso/debian.iso", SourceISOChecksum: "sha256:65273beed27b2df543b68b65630ba525cfbad8df2b12035732b2dff87d6664e7",
-		TemplateVMID: 9100, MirrorURL: "http://10.31.0.2/debian", SecurityMirrorURL: "http://10.31.0.2/debian-security",
+		TemplateVMID: 9100, MirrorURL: "http://mirror.example.com/debian", SecurityMirrorURL: "http://mirror.example.com/debian-security",
 		StoragePool: "ceph-pve", Bridge: "vmbr0", DefaultCores: 4, DefaultMemoryMB: 4096, DefaultDiskGB: 32,
 		Firmware: "seabios", TPMVersion: "none", DefaultGPUProfileID: "none",
 	}

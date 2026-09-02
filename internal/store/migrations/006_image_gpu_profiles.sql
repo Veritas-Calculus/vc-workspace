@@ -44,7 +44,7 @@ INSERT INTO image_profiles(
   default_gpu_profile_id,build_status,status_detail
 )
 VALUES
-  ('debian-13-xfce','Debian 13 · XFCE','linux','13','supported',true,'http://10.31.0.2/debian','linux','none','draft','Configure a PVE template VMID after the image passes RDP validation.'),
+  ('debian-13-xfce','Debian 13 · XFCE','linux','13','supported',true,'','linux','none','draft','Configure a PVE template VMID after the image passes RDP validation.'),
   ('windows-11','Windows 11','windows','11','supported',false,'','windows','none','blocked','Import licensed Windows 11 and VirtIO installation media before building.'),
   ('windows-10-22h2','Windows 10 22H2','windows','10 22H2','legacy',false,'','windows','none','blocked','Windows 10 requires an eligible LTSC or ESU lifecycle and licensed installation media.')
 ON CONFLICT(id) DO NOTHING;

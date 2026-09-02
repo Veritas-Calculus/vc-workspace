@@ -92,18 +92,15 @@ variable "agent_binary" {
 }
 
 variable "mirror_host" {
-  type    = string
-  default = "10.31.0.2"
+  type = string
 }
 
 variable "mirror_url" {
-  type    = string
-  default = "http://10.31.0.2/debian"
+  type = string
 }
 
 variable "security_mirror_url" {
-  type    = string
-  default = "http://10.31.0.2/debian-security"
+  type = string
 }
 
 source "proxmox-iso" "debian13_xfce" {

@@ -20,9 +20,9 @@ func TestCommandSpecKeepsSecretsOutOfArgumentsAndUsesConfiguredMirror(t *testing
 	}
 	environment := strings.Join(spec.env, "\n")
 	for _, expected := range []string{
-		"PKR_VAR_mirror_host=10.31.0.2",
-		"PKR_VAR_mirror_url=http://10.31.0.2/debian",
-		"PKR_VAR_security_mirror_url=http://10.31.0.2/debian-security",
+		"PKR_VAR_mirror_host=mirror.example.com",
+		"PKR_VAR_mirror_url=http://mirror.example.com/debian",
+		"PKR_VAR_security_mirror_url=http://mirror.example.com/debian-security",
 		"PKR_VAR_cores=6",
 		"PKR_VAR_memory_mb=6144",
 		"PKR_VAR_disk_size=48G",
@@ -48,7 +48,7 @@ func TestValidateRequestRequiresWindowsDriverMediaAndUEFI(t *testing.T) {
 
 func TestValidateRequestRejectsCredentialsInMirrorAndUnsafePassword(t *testing.T) {
 	request := validDebianRequest()
-	request.MirrorURL = "http://user:pass@10.31.0.2/debian"
+	request.MirrorURL = "http://user:pass@mirror.example.com/debian"
 	if err := ValidateRequest(request); err == nil {
 		t.Fatal("expected mirror credentials to fail")
 	}
@@ -109,7 +109,7 @@ func validDebianRequest() Request {
 		ProfileID: "debian-13-xfce", Node: "infra-node6", VMID: 9200,
 		SourceISO:         "local:iso/debian-13.6.0-amd64-netinst.iso",
 		SourceISOChecksum: "sha256:65273beed27b2df543b68b65630ba525cfbad8df2b12035732b2dff87d6664e7",
-		MirrorURL:         "http://10.31.0.2/debian", SecurityMirrorURL: "http://10.31.0.2/debian-security",
+		MirrorURL:         "http://mirror.example.com/debian", SecurityMirrorURL: "http://mirror.example.com/debian-security",
 		StoragePool: "ceph-pve", Bridge: "vmbr0", Cores: 6, MemoryMB: 6144, DiskGB: 48,
 		Firmware: "seabios", TPMVersion: "none", BuilderPassword: "BuildPass-123!",
 	}

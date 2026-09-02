@@ -52,7 +52,7 @@ Web 可以用 `vc-vdi://connect?vmid=<正整数>` 把一台桌面交给已安装
 ## 镜像与 GPU
 
 - `image_profiles` 是 Debian 13 XFCE、Windows 10 和 Windows 11 的当前配置事实源，包含 PVE 构建节点、ISO、VirtIO ISO、模板 VMID、镜像源、CPU/内存/系统盘、固件/TPM、Agent 类型、默认 GPU 档位和构建状态。
-- 构建流水线输出不可变 PVE 模板。Windows 构建先安装 VirtIO、QEMU Guest Agent、Cloudbase-Init 与 VC Workspace Agent，再执行 Sysprep `/generalize`；Debian 构建使用 `10.31.0.2` 软件源并执行 `cloud-init clean`。
+- 构建流水线输出不可变 PVE 模板。Windows 构建先安装 VirtIO、QEMU Guest Agent、Cloudbase-Init 与 VC Workspace Agent，再执行 Sysprep `/generalize`；Debian 构建使用管理员在镜像配置中填写的软件源并执行 `cloud-init clean`。
 - Web Bootstrap 保存构建参数后创建 `image.build` Job。启动前控制面实时校验节点在线、存储可用、目标 VMID 未占用，并限制同一镜像只能存在一个活动构建；Packer 输出被脱敏后收敛为进度。成功只把镜像置为 `testing`，避免未经克隆和 RDP 验收的模板进入桌面创建入口。
 - `gpu_profiles` 表达调度约束，不直接等价于“硬件可用”。完整直通要求映射、目标节点、设备 ID、Vendor/Class 与有效 IOMMU group 全部匹配；mdev 要求映射标记为 mediated、目标节点实时暴露指定 `mdev_type` 且 `available > 0`。
 - PCI Resource Mapping 的创建和更新也由控制面承担：请求只提交逻辑 ID、模式与节点/PCI 地址，硬件 Vendor/Device ID、IOMMU group 和 mdev 能力必须从实时 PVE 清单解析，浏览器不能自行声明这些可信属性。

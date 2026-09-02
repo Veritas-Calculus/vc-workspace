@@ -91,7 +91,7 @@ macOS 构建机需要 CMake 和 Ninja；数据面运行时由 `build-native-rdp.
 
 2026-09-01 实机验收证明：控制面在 VM 158 迁移到 `infra-node6` 后仍能动态定位节点，读取 Guest Agent 就绪标记、轮换 `vdi` 凭据并签发 RDP 描述符；macOS FreeRDP 完成 TLS/RDP 协商、进入 Active 状态并接收桌面图像帧，VM 侧同时确认 Xorg `:10`、XFCE 窗口管理器与重连会话正常。
 
-2026-09-02 正式模板证明：Packer 使用 Debian 13.6.0 官方 netinst ISO 与 `10.31.0.2` 内网 APT 源完成 VMID 9100，并转换为 PVE 模板。完整克隆 VM 9101 首启后通过 QEMU Guest Agent、VC Workspace 就绪标记、Debian 13/XFCE 配方和 macOS FreeRDP 一次性密码认证。
+2026-09-02 正式模板证明：Packer 使用 Debian 13.6.0 官方 netinst ISO 与管理员配置的内网 APT 源完成 VMID 9100，并转换为 PVE 模板。完整克隆 VM 9101 首启后通过 QEMU Guest Agent、VC Workspace 就绪标记、Debian 13/XFCE 配方和 macOS FreeRDP 一次性密码认证。
 
 2026-09-02 Windows 技术模板证明：Packer 使用 node4 上已校验的 Windows 10 22H2 与 VirtIO ISO 完成 VMID 9110，Sysprep/Cloudbase 泛化成功并转换为 PVE 模板。完整克隆 VM 9112 首启后通过 Windows 10 Pro build 19045、QEMU Guest Agent、VC Workspace Agent 启动任务与就绪标记、3389 监听、密码轮换和 macOS FreeRDP 认证；由于普通 Home/Pro 22H2 已结束支持，后台保持停用和 legacy 标记。
 

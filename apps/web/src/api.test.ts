@@ -13,7 +13,7 @@ describe('startImageBuild', () => {
 
     await startImageBuild('debian-13-xfce', {
       template_vmid: 9200,
-      mirror_url: 'http://10.31.0.2/debian',
+      mirror_url: 'http://mirror.example.com/debian',
       build_status: 'draft',
     }, {
       builder_password: 'BuildPass-123!',
@@ -32,7 +32,7 @@ describe('startImageBuild', () => {
     expect(JSON.parse(String(init?.body))).toEqual({
       profile: {
         template_vmid: 9200,
-        mirror_url: 'http://10.31.0.2/debian',
+        mirror_url: 'http://mirror.example.com/debian',
         build_status: 'draft',
       },
       builder_password: 'BuildPass-123!',

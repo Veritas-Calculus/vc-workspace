@@ -8,7 +8,6 @@ ALTER TABLE image_profiles
 
 UPDATE image_profiles
 SET source_iso_checksum='sha256:65273beed27b2df543b68b65630ba525cfbad8df2b12035732b2dff87d6664e7',
-    security_mirror_url='http://10.31.0.2/debian-security',
     storage_pool='ceph-pve', bridge='vmbr0'
 WHERE id='debian-13-xfce' AND source_iso_checksum='';
 
