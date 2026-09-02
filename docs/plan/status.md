@@ -39,7 +39,7 @@ VC Workspace 已完成面向人的核心纵向闭环：管理员可以初始化�
 
 | ID | 优先级 | 状态 | 任务 | 完成条件 |
 |---|---|---|---|---|
-| RELEASE-01 | P0 | 进行中 | 建立开源仓库基线 | 许可证已定为 Apache-2.0，`LICENSE`、`CONTRIBUTING.md`、`SECURITY.md` 和首个 commit 已完成；剩余条件是确定版权归属主体、清理文档中的内网拓扑、push 到远端并让 GitHub Actions 在远端通过 |
+| RELEASE-01 | P0 | 进行中 | 建立开源仓库基线 | 许可证已定为 Apache-2.0，`LICENSE`、`CONTRIBUTING.md`、`SECURITY.md` 和首个 commit 已完成；剩余条件是确定版权归属主体、push 到远端并让 GitHub Actions 在远端通过 |
 | AI-01 | P0 | 待开发 | MCP Computer Use 最小纵向切片 | Agent 在有效 Lease 和当前 `control_epoch` 内获取截图/可访问性快照并执行受控键盘、鼠标和文本输入；人工接管立即使旧控制权失效；每个动作有审计和有界超时；Debian 13 与 Windows 11 各完成一条真实任务 |
 | POLICY-01 | P0 | 待开发 | 完成 M11 会话策略基础 | 数据模型、作用域解析、签名快照、Web 管理、macOS/Guest 执行端和审计完成；剪贴板、文件/磁盘重定向及受管背景在 Debian 13/Windows 上实测，强制策略未应用时拒绝建联 |
 | IMAGE-01 | P0 | 待实测 | 通过 Web 完成模板 Bootstrap 闭环 | 使用未占用 VMID 从 Web 构建 Debian 13 与 Windows 11，完成模板转换、完整克隆、Agent/QGA/RDP 验收后手工切到 `ready`；Windows 10 是否生产启用由介质支持与授权决定 |
