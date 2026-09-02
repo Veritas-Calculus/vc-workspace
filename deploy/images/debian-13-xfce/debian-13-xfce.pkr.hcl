@@ -91,7 +91,15 @@ variable "agent_binary" {
   type = string
 }
 
+variable "mirror_protocol" {
+  type = string
+}
+
 variable "mirror_host" {
+  type = string
+}
+
+variable "mirror_directory" {
   type = string
 }
 
@@ -135,7 +143,9 @@ source "proxmox-iso" "debian13_xfce" {
   http_content = {
     "/preseed.cfg" = templatefile(abspath("${path.root}/preseed.pkrtpl.hcl"), {
       builder_password = var.builder_password
+      mirror_protocol  = var.mirror_protocol
       mirror_host      = var.mirror_host
+      mirror_directory = var.mirror_directory
     })
   }
 

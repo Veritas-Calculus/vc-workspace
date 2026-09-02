@@ -20,7 +20,9 @@ func TestCommandSpecKeepsSecretsOutOfArgumentsAndUsesConfiguredMirror(t *testing
 	}
 	environment := strings.Join(spec.env, "\n")
 	for _, expected := range []string{
+		"PKR_VAR_mirror_protocol=http",
 		"PKR_VAR_mirror_host=mirror.example.com",
+		"PKR_VAR_mirror_directory=/debian",
 		"PKR_VAR_mirror_url=http://mirror.example.com/debian",
 		"PKR_VAR_security_mirror_url=http://mirror.example.com/debian-security",
 		"PKR_VAR_cores=6",
@@ -125,5 +127,39 @@ func validWindowsRequest() Request {
 		StoragePool:       "ceph-pve", Bridge: "vmbr0", WindowsImageName: "Windows 11 Enterprise Evaluation",
 		Cores: 4, MemoryMB: 8192, DiskGB: 64, Firmware: "uefi", TPMVersion: "2.0",
 		BuilderPassword: "BuildPass-123!",
+	}
+}
+
+func TestCommandSpecDerivesInstallerMirrorFieldsFromURL(t *testing.T) {
+	builder := testBuilder(t)
+	request := validDebianRequest()
+	request.MirrorURL = "https://mirror.example.com:8443/mirrors/debian/"
+	request.SecurityMirrorURL = "https://mirror.example.com:8443/mirrors/debian-security"
+	spec, err := builder.commandSpec(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment := strings.Join(spec.env, "\n")
+	for _, expected := range []string{
+		"PKR_VAR_mirror_protocol=https",
+		"PKR_VAR_mirror_host=mirror.example.com:8443",
+		"PKR_VAR_mirror_directory=/mirrors/debian",
+	} {
+		if !strings.Contains(environment, expected) {
+			t.Fatalf("environment does not contain %q", expected)
+		}
+	}
+}
+
+func TestCommandSpecUsesRootDirectoryForMirrorWithoutPath(t *testing.T) {
+	builder := testBuilder(t)
+	request := validDebianRequest()
+	request.MirrorURL = "http://mirror.example.com"
+	spec, err := builder.commandSpec(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(spec.env, "\n"), "PKR_VAR_mirror_directory=/") {
+		t.Fatal("mirror without a path must fall back to the root directory")
 	}
 }

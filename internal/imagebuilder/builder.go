@@ -219,9 +219,18 @@ func (b *Builder) commandSpec(request Request) (commandSpec, error) {
 		values["cloudbase_init_msi"] = b.config.CloudbaseInitMSI
 	} else {
 		mirror, _ := url.Parse(request.MirrorURL)
+		// The installer addresses the mirror in three separate debconf fields, so a
+		// URL with a port, a path prefix or https is only honoured if all three are
+		// derived here. configure-desktop.sh consumes the same URL whole.
+		mirrorDirectory := strings.TrimRight(mirror.Path, "/")
+		if mirrorDirectory == "" {
+			mirrorDirectory = "/"
+		}
 		values["iso_file"] = request.SourceISO
 		values["iso_checksum"] = request.SourceISOChecksum
-		values["mirror_host"] = mirror.Hostname()
+		values["mirror_protocol"] = mirror.Scheme
+		values["mirror_host"] = mirror.Host
+		values["mirror_directory"] = mirrorDirectory
 		values["mirror_url"] = request.MirrorURL
 		values["security_mirror_url"] = request.SecurityMirrorURL
 		values["builder_password"] = request.BuilderPassword

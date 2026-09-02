@@ -5,8 +5,9 @@ d-i netcfg/get_hostname string vc-vdi-debian-13-xfce
 d-i netcfg/get_domain string local
 
 d-i mirror/country string manual
+d-i mirror/protocol string ${mirror_protocol}
 d-i mirror/http/hostname string ${mirror_host}
-d-i mirror/http/directory string /debian
+d-i mirror/http/directory string ${mirror_directory}
 d-i mirror/http/proxy string
 d-i mirror/suite string trixie
 
