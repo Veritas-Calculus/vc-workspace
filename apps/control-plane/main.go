@@ -10,12 +10,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/virtual-cable/vc-vdi/internal/config"
-	"github.com/virtual-cable/vc-vdi/internal/httpapi"
-	"github.com/virtual-cable/vc-vdi/internal/imagebuilder"
-	"github.com/virtual-cable/vc-vdi/internal/oidcauth"
-	"github.com/virtual-cable/vc-vdi/internal/pve"
-	"github.com/virtual-cable/vc-vdi/internal/store"
+	"github.com/Veritas-Calculus/vc-workspace/internal/config"
+	"github.com/Veritas-Calculus/vc-workspace/internal/httpapi"
+	"github.com/Veritas-Calculus/vc-workspace/internal/imagebuilder"
+	"github.com/Veritas-Calculus/vc-workspace/internal/oidcauth"
+	"github.com/Veritas-Calculus/vc-workspace/internal/pve"
+	"github.com/Veritas-Calculus/vc-workspace/internal/store"
 )
 
 func main() {

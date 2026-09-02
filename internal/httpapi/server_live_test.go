@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/virtual-cable/vc-vdi/internal/pve"
+	"github.com/Veritas-Calculus/vc-workspace/internal/pve"
 )
 
 // This destructive opt-in check toggles the real desktop account through the

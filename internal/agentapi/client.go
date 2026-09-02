@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/virtual-cable/vc-vdi/internal/auth"
+	"github.com/Veritas-Calculus/vc-workspace/internal/auth"
 )
 
 type Client struct {

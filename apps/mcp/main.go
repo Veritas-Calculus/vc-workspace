@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/virtual-cable/vc-vdi/internal/agentapi"
-	"github.com/virtual-cable/vc-vdi/internal/auth"
+	"github.com/Veritas-Calculus/vc-workspace/internal/agentapi"
+	"github.com/Veritas-Calculus/vc-workspace/internal/auth"
 )
 
 type noInput struct{}

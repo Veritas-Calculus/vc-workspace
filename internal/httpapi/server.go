@@ -16,11 +16,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/virtual-cable/vc-vdi/internal/auth"
-	"github.com/virtual-cable/vc-vdi/internal/imagebuilder"
-	"github.com/virtual-cable/vc-vdi/internal/oidcauth"
-	"github.com/virtual-cable/vc-vdi/internal/pve"
-	"github.com/virtual-cable/vc-vdi/internal/store"
+	"github.com/Veritas-Calculus/vc-workspace/internal/auth"
+	"github.com/Veritas-Calculus/vc-workspace/internal/imagebuilder"
+	"github.com/Veritas-Calculus/vc-workspace/internal/oidcauth"
+	"github.com/Veritas-Calculus/vc-workspace/internal/pve"
+	"github.com/Veritas-Calculus/vc-workspace/internal/store"
 	"golang.org/x/oauth2"
 )
 

@@ -1,4 +1,4 @@
-module github.com/virtual-cable/vc-vdi
+module github.com/Veritas-Calculus/vc-workspace
 
 go 1.27
 

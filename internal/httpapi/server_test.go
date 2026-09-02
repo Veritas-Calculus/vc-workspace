@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/virtual-cable/vc-vdi/internal/pve"
-	"github.com/virtual-cable/vc-vdi/internal/store"
+	"github.com/Veritas-Calculus/vc-workspace/internal/pve"
+	"github.com/Veritas-Calculus/vc-workspace/internal/store"
 )
 
 func TestHealth(t *testing.T) {

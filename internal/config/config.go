@@ -5,9 +5,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/virtual-cable/vc-vdi/internal/imagebuilder"
-	"github.com/virtual-cable/vc-vdi/internal/oidcauth"
-	"github.com/virtual-cable/vc-vdi/internal/pve"
+	"github.com/Veritas-Calculus/vc-workspace/internal/imagebuilder"
+	"github.com/Veritas-Calculus/vc-workspace/internal/oidcauth"
+	"github.com/Veritas-Calculus/vc-workspace/internal/pve"
 )
 
 type Config struct {
