@@ -41,7 +41,7 @@ crates/
 internal/           Go 模块化单体内部包
 api/                OpenAPI 契约
 assets/brand/       官方标志、应用图标与发布源文件
-deploy/             Compose、Cloud-Init 与 Packer OS 模板
+deploy/             Compose、容器、Kubernetes 清单与 Packer OS 模板
 docs/               当前有效的产品、架构、设计与运维文档
 ```
 

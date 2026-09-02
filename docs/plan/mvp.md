@@ -17,7 +17,6 @@ MVP 包含：
 - 单 PVE 集群清单、模板发现、Clone、Start、Stop 与异步任务跟踪。
 - 简洁 Web 控制台，不显示无法操作的能力标签或装饰性指标。
 - macOS 客户端本地登录、Keychain Session、桌面列表、启动与 FreeRDP 建联；OIDC 保留但不阻塞数据面验收。
-- 基于 Cloud-Init 的 Debian XFCE、xrdp 与 QEMU Guest Agent 桌面配方。
 - Debian 13 XFCE、Windows 10/11 的 Packer 模板定义，以及跨平台 VC Workspace Guest Agent。
 - 管理端可维护镜像来源、构建节点、模板 VMID、Guest Agent、构建状态和默认 GPU 档位。
 - PVE GPU 实时发现；Intel GVT-g 按 mdev 类型和剩余实例调度，完整直通档位继续以 IOMMU 可用为启用前提。
