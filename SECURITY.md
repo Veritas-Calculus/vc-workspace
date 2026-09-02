@@ -24,4 +24,4 @@
 
 ## 部署侧要求
 
-PVE 凭证只通过环境变量或宿主机凭证文件提供，不得提交到 Git。生产部署使用最小权限 API Token 而非账号密码。公网只暴露 `443/TCP`；PVE、OIDC、RDP、QGA 和镜像构建端口的边界见 [Kubernetes 部署](docs/operations/kubernetes.md)。
+PVE 凭证只通过环境变量或宿主机凭证文件提供，不得提交到 Git。生产部署使用最小权限 API Token 而非账号密码。镜像构建默认校验 PVE 端点证书；Packer 变量 `pve_insecure_tls` 只在端点使用自签名证书且其 CA 无法加入构建主机信任库时才置为 `true`，因为构建过程会把一次性 PVE Token 和构建密码送往该端点。公网只暴露 `443/TCP`；PVE、OIDC、RDP、QGA 和镜像构建端口的边界见 [Kubernetes 部署](docs/operations/kubernetes.md)。

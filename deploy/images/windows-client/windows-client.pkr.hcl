@@ -11,6 +11,12 @@ variable "pve_url" {
   type = string
 }
 
+variable "pve_insecure_tls" {
+  type        = bool
+  default     = false
+  description = "Skip PVE TLS verification. Only for a self-signed endpoint whose CA cannot be added to the build host trust store."
+}
+
 variable "pve_username" {
   type = string
 }
@@ -111,7 +117,7 @@ source "proxmox-iso" "windows_client" {
   username                 = var.pve_username
   token                    = var.pve_token
   password                 = var.pve_password
-  insecure_skip_tls_verify = true
+  insecure_skip_tls_verify = var.pve_insecure_tls
   node                     = var.pve_node
   vm_id                    = var.vm_id
   vm_name                  = var.template_name
