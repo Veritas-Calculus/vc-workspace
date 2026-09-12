@@ -149,7 +149,8 @@ jobs:
           $artifacts = cargo test --locked -p vc-workspace-windows-session --no-run --message-format=json |
             ForEach-Object { try { $_ | ConvertFrom-Json } catch { } } |
             Where-Object { $_.reason -eq 'compiler-artifact' -and $_.executable -and $_.target.test }
-          $built = ($artifacts | Where-Object { $_.target.name -eq 'vc-workspace-windows-session' } |
+          # Match package_id: cargo rewrites target.name dashes to underscores.
+          $built = ($artifacts | Where-Object { $_.package_id -like '*#vc-workspace-windows-session@*' } |
             Select-Object -Last 1).executable
           if ($LASTEXITCODE -ne 0) { throw "cargo test --no-run failed with exit code $LASTEXITCODE" }
           if (-not $built) { throw 'no vc-workspace-windows-session test executable' }
