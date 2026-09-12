@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState, type ComponentType } from 'react'
+import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import { Activity, AppWindow, ClipboardList, Cpu, Images, Monitor, Pencil, Play, Search, Server, ShieldCheck, Square, UsersRound } from 'lucide-react'
 import type { GPUProfile, ImageProfile, Infrastructure, Job, PlatformConfig } from '../api'
 import { desktopAppLink } from '../app-link'
 import type { Locale, MessageKey } from '../i18n'
 import { EmptyState } from '../components/states'
+import { canInspectCloneRecovery } from '../clone-recovery'
+import { CloneRecoveryForm } from './clone-recovery'
 
 export type ConsoleView = 'desktops' | 'activity' | 'infrastructure' | 'images' | 'gpu' | 'access' | 'audit'
 export type Translator = (key: MessageKey, variables?: Record<string, string>) => string
@@ -107,21 +109,34 @@ const jobStateMessages: Record<Job['state'], MessageKey> = {
   failed: 'failed',
 }
 
-export function ActivityView({ jobs, locale, t }: { jobs: Job[]; locale: Locale; t: Translator }) {
+export function ActivityView({ jobs, locale, t, csrf, onJob }: { jobs: Job[]; locale: Locale; t: Translator; csrf?: string; onJob?: (job: Job) => void }) {
+  const [recovering, setRecovering] = useState<Job | null>(null)
+  const recoveryTrigger = useRef<HTMLButtonElement | null>(null)
+  const taskHeading = useRef<HTMLHeadingElement>(null)
+  const closeRecovery = () => {
+    const target = recoveryTrigger.current
+    if (target?.isConnected) target.focus()
+    else taskHeading.current?.focus()
+    setRecovering(null)
+  }
   if (jobs.length === 0) return <EmptyState title={t('noTasks')} detail={t('noTasksDetail')} />
   return (
     <section className="section" aria-labelledby="recent-tasks-title">
-      <div className="section-heading"><h2 id="recent-tasks-title">{t('recentTasks')} <span className="section-count">{jobs.length}</span></h2></div>
+      <div className="section-heading"><h2 id="recent-tasks-title" ref={taskHeading} tabIndex={-1}>{t('recentTasks')} <span className="section-count">{jobs.length}</span></h2></div>
       <div className="table-scroll">
         <table>
           <thead><tr><th data-column="operation" data-fluid>{t('operation')}</th><th>{t('target')}</th><th>{t('status')}</th><th className="numeric-column">{t('progress')}</th><th>{t('updated')}</th><th>{t('detail')}</th></tr></thead>
           <tbody>{jobs.map((job) => {
             const operationKey = jobOperationMessages[job.operation]
             const detail = job.error || job.detail || '—'
-            return <tr key={job.id}><td className="primary-cell">{operationKey ? t(operationKey) : <code>{job.operation}</code>}</td><td>{job.target_vmid ? `VM ${job.target_vmid}` : job.target_node || '—'}</td><td><span className="status" data-status={job.state}><span className="status-mark" aria-hidden="true" />{t(jobStateMessages[job.state])}</span></td><td className="numeric-column">{job.progress}%</td><td><time dateTime={job.updated_at}>{formatDateTime(job.updated_at, locale)}</time></td><td className="detail-cell"><span className="truncate" title={detail}>{detail}</span></td></tr>
+            return <tr key={job.id}><td className="primary-cell">{operationKey ? t(operationKey) : <code>{job.operation}</code>}</td><td>{job.target_vmid ? `VM ${job.target_vmid}` : job.target_node || '—'}</td><td><span className="status" data-status={job.state}><span className="status-mark" aria-hidden="true" />{t(jobStateMessages[job.state])}</span></td><td className="numeric-column">{job.progress}%</td><td><time dateTime={job.updated_at}>{formatDateTime(job.updated_at, locale)}</time></td><td className="detail-cell"><span className="truncate" title={detail}>{detail}</span>{csrf && onJob && canInspectCloneRecovery(job) && <button type="button" className="button" aria-label={`${t('cloneRecovery')} · VM ${job.target_vmid}`} aria-expanded={recovering?.id === job.id} onClick={event => {
+              if (recovering?.id === job.id) closeRecovery()
+              else { recoveryTrigger.current = event.currentTarget; setRecovering(job) }
+            }}>{t('cloneRecovery')}</button>}</td></tr>
           })}</tbody>
         </table>
       </div>
+      {recovering && csrf && onJob && <CloneRecoveryForm key={recovering.id} job={recovering} csrf={csrf} t={t} onJob={onJob} onClose={closeRecovery} />}
     </section>
   )
 }

@@ -1,0 +1,121 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: vc-workspace-session-gateway
+spec:
+  selector:
+    app.kubernetes.io/name: vc-workspace-session-gateway
+  ports:
+    - name: https
+      port: 8443
+      targetPort: https
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vc-workspace-session-gateway
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vc-workspace-session-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vc-workspace-session-gateway
+        app.kubernetes.io/part-of: vc-workspace
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets: [{name: vc-workspace-registry}]
+      terminationGracePeriodSeconds: 20
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          image: harbor.infra.plz.ac/vc-workspace/session-gateway:gateway-20260907-1
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          env:
+            - {name: VC_WORKSPACE_GATEWAY_ADDR, value: '0.0.0.0:8443'}
+            - {name: VC_WORKSPACE_GATEWAY_PUBLIC_URL, value: 'https://ws.infra.plz.ac'}
+            - {name: VC_WORKSPACE_GATEWAY_ID, value: gw_infra_gateway}
+            - name: VC_WORKSPACE_GATEWAY_ALLOWED_TARGETS
+              valueFrom:
+                configMapKeyRef: {name: vc-workspace-targets, key: allowed-targets}
+            - {name: VC_WORKSPACE_GATEWAY_MAX_CONNECTIONS, value: '16'}
+            - {name: VC_WORKSPACE_GATEWAY_TLS_CERT_FILE, value: /tls/server/tls.crt}
+            - {name: VC_WORKSPACE_GATEWAY_TLS_KEY_FILE, value: /tls/server/tls.key}
+            - {name: VC_WORKSPACE_GATEWAY_CONTROL_URL, value: 'https://vc-workspace-control-plane.vc-workspace.svc:8444'}
+            - {name: VC_WORKSPACE_GATEWAY_CONTROL_CA_FILE, value: /tls/client/ca.crt}
+            - {name: VC_WORKSPACE_GATEWAY_CLIENT_CERT_FILE, value: /tls/client/tls.crt}
+            - {name: VC_WORKSPACE_GATEWAY_CLIENT_KEY_FILE, value: /tls/client/tls.key}
+          ports:
+            - {name: https, containerPort: 8443}
+          readinessProbe:
+            httpGet:
+              scheme: HTTPS
+              port: https
+              path: /ready
+              httpHeaders: [{name: Host, value: ws.infra.plz.ac}]
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              scheme: HTTPS
+              port: https
+              path: /health
+              httpHeaders: [{name: Host, value: ws.infra.plz.ac}]
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 256Mi}
+          volumeMounts:
+            - {name: server-tls, mountPath: /tls/server, readOnly: true}
+            - {name: client-tls, mountPath: /tls/client, readOnly: true}
+      volumes:
+        - name: server-tls
+          secret: {secretName: vc-workspace-gateway-tls, defaultMode: 0440}
+        - name: client-tls
+          secret: {secretName: vc-workspace-gateway-active-client, defaultMode: 0440}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vc-workspace-gateway
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+    nginx.ingress.kubernetes.io/proxy-ssl-verify: 'on'
+    nginx.ingress.kubernetes.io/proxy-ssl-verify-depth: '2'
+    nginx.ingress.kubernetes.io/proxy-ssl-secret: vc-workspace/vc-workspace-upstream-ca
+    nginx.ingress.kubernetes.io/proxy-ssl-name: ws.infra.plz.ac
+    nginx.ingress.kubernetes.io/proxy-ssl-server-name: 'on'
+    nginx.ingress.kubernetes.io/proxy-ssl-protocols: TLSv1.3
+    nginx.ingress.kubernetes.io/proxy-buffering: 'off'
+    nginx.ingress.kubernetes.io/proxy-request-buffering: 'off'
+    nginx.ingress.kubernetes.io/proxy-read-timeout: '3600'
+    nginx.ingress.kubernetes.io/proxy-send-timeout: '3600'
+    nginx.ingress.kubernetes.io/ssl-redirect: 'true'
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [ws.infra.plz.ac]
+      secretName: vc-workspace-tls
+  rules:
+    - host: ws.infra.plz.ac
+      http:
+        paths:
+          - path: /gateway/v1/rdp
+            pathType: Exact
+            backend:
+              service:
+                name: vc-workspace-session-gateway
+                port: {name: https}

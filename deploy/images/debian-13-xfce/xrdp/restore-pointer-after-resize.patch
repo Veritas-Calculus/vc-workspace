@@ -1,0 +1,384 @@
+--- a/xrdp/xrdp.h
++++ b/xrdp/xrdp.h
+@@ -127,6 +127,10 @@
+ int
+ xrdp_wm_load_static_pointers(struct xrdp_wm *self);
+ int
++xrdp_wm_prepare_pointer_reset(struct xrdp_wm *self);
++int
++xrdp_wm_finish_pointer_reset(struct xrdp_wm *self);
++int
+ xrdp_wm_init(struct xrdp_wm *self);
+ int
+ xrdp_wm_send_bitmap(struct xrdp_wm *self, struct xrdp_bitmap *bitmap,
+@@ -474,6 +478,10 @@
+     /// This flag is set if the state machine needs to
+     /// shutdown/startup EGFX
+     int using_egfx;
++    /* Keep the current image, not a client cache index, across reactivation. */
++    int pointer_reset;
++    int saved_pointer_index;
++    struct xrdp_pointer_item saved_pointer;
+ };
+ 
+ int
+--- a/xrdp/xrdp_wm.c
++++ b/xrdp/xrdp_wm.c
+@@ -282,7 +282,16 @@
+     pointer_item->height = height;
+     g_memcpy(pointer_item->data, data, bytes);
+     g_memcpy(pointer_item->mask, mask, width * height / 8);
+-    self->screen->pointer = xrdp_cache_add_pointer(self->cache, pointer_item);
++    if (self->mm->resize_data != NULL && self->mm->resize_data->pointer_reset)
++    {
++        /* Output is deactivated. Retain the latest backend cursor image. */
++        self->mm->resize_data->saved_pointer = *pointer_item;
++        self->mm->resize_data->saved_pointer_index = 2;
++    }
++    else
++    {
++        self->screen->pointer = xrdp_cache_add_pointer(self->cache, pointer_item);
++    }
+     g_free(pointer_item);
+     return 0;
+ }
+@@ -413,7 +422,60 @@
+ int
+ xrdp_wm_set_pointer(struct xrdp_wm *self, int cache_idx)
+ {
++    if (self->mm->resize_data != NULL && self->mm->resize_data->pointer_reset)
++    {
++        /* No cached reference is valid until reactivation has reseeded it. */
++        return 0;
++    }
+     return libxrdp_set_pointer(self->session, cache_idx);
++}
++
++/*****************************************************************************/
++int
++xrdp_wm_prepare_pointer_reset(struct xrdp_wm *self)
++{
++    struct display_control_monitor_layout_data *resize = self->mm->resize_data;
++    const int index = self->screen->pointer;
++    if (resize == NULL || index < 0 ||
++            index >= self->cache->pointer_cache_entries || index >= 32)
++    {
++        return 1;
++    }
++    if (index >= 2 && self->cache->pointer_items[index].stamp == 0)
++    {
++        return 1;
++    }
++    resize->saved_pointer_index = index;
++    resize->saved_pointer = self->cache->pointer_items[index];
++    resize->pointer_reset = 1;
++    return 0;
++}
++
++/*****************************************************************************/
++int
++xrdp_wm_finish_pointer_reset(struct xrdp_wm *self)
++{
++    struct display_control_monitor_layout_data *resize = self->mm->resize_data;
++    if (resize == NULL || !resize->pointer_reset ||
++            self->cache->pointer_cache_entries < 2 ||
++            self->cache->pointer_cache_entries > 32 ||
++            (resize->saved_pointer_index >= 2 &&
++             self->cache->pointer_cache_entries < 3))
++    {
++        return 1;
++    }
++    resize->pointer_reset = 0;
++    if (resize->saved_pointer_index >= 2)
++    {
++        /* A fresh cache entry sends the image before any cached reference. */
++        self->screen->pointer = xrdp_cache_add_pointer(self->cache,
++                                                      &resize->saved_pointer);
++        return 0;
++    }
++    /* The two static images were already resent by load_static_pointers. */
++    self->screen->pointer = resize->saved_pointer_index;
++    self->current_pointer = self->screen->pointer;
++    return xrdp_wm_set_pointer(self, self->screen->pointer);
+ }
+ 
+ /*****************************************************************************/
+--- a/xrdp/xrdp_mm.c
++++ b/xrdp/xrdp_mm.c
+@@ -1770,6 +1770,11 @@
+             advance_resize_state_machine(mm, WMRZ_XRDP_CORE_RESET);
+             break;
+         case WMRZ_XRDP_CORE_RESET:
++            error = xrdp_wm_prepare_pointer_reset(wm);
++            if (error != 0)
++            {
++                return advance_error(error, mm);
++            }
+             sync_dynamic_monitor_data(wm, &(description->description));
+             error = libxrdp_reset(wm->session);
+             if (error != 0)
+@@ -1810,6 +1815,11 @@
+                 LOG_DEVEL(LOG_LEVEL_INFO,
+                           "process_display_control_monitor_layout_data:"
+                           " xrdp_wm_load_static_pointers failed %d", error);
++                return advance_error(error, mm);
++            }
++            error = xrdp_wm_finish_pointer_reset(wm);
++            if (error != 0)
++            {
+                 return advance_error(error, mm);
+             }
+             /* resize the main window */
+--- a/tests/xrdp/Makefile.am
++++ b/tests/xrdp/Makefile.am
+@@ -28,7 +28,8 @@
+     test_xrdp_main.c \
+     test_xrdp_egfx.c \
+     test_xrdp_region.c \
+-    test_bitmap_load.c
++    test_bitmap_load.c \
++    test_pointer_reset.c
+ 
+ test_xrdp_CFLAGS = \
+     -D IMAGEDIR=\"$(srcdir)\" \
+@@ -36,7 +37,8 @@
+     @CMOCKA_CFLAGS@
+ 
+ test_xrdp_LDFLAGS = -Wl,--wrap=pixman_region_extents, \
+-    -Wl,--wrap=pixman_region_not_empty
++    -Wl,--wrap=pixman_region_not_empty \
++    -Wl,--wrap=libxrdp_send_pointer,--wrap=libxrdp_set_pointer
+ 
+ test_xrdp_LDADD = \
+     $(top_builddir)/xrdp/xrdp_bitmap_load.o \
+--- a/tests/xrdp/test_xrdp.h
++++ b/tests/xrdp/test_xrdp.h
+@@ -6,5 +6,6 @@
+ Suite *make_suite_test_bitmap_load(void);
+ Suite *make_suite_egfx_base_functions(void);
+ Suite *make_suite_region(void);
++Suite *make_suite_pointer_reset(void);
+ 
+ #endif /* TEST_XRDP_H */
+--- a/tests/xrdp/test_xrdp_main.c
++++ b/tests/xrdp/test_xrdp_main.c
+@@ -57,6 +57,7 @@
+     sr = srunner_create (make_suite_test_bitmap_load());
+     srunner_add_suite(sr, make_suite_egfx_base_functions());
+     srunner_add_suite(sr, make_suite_region());
++    srunner_add_suite(sr, make_suite_pointer_reset());
+ 
+     srunner_set_tap(sr, "-");
+     srunner_run_all (sr, CK_ENV);
+--- /dev/null
++++ b/tests/xrdp/test_pointer_reset.c
+@@ -0,0 +1,209 @@
++/* SPDX-License-Identifier: Apache-2.0 */
++/* Exercise production WM/cache functions with a strict client pointer cache. */
++#if defined(HAVE_CONFIG_H)
++#include "config_ac.h"
++#endif
++#include "test_xrdp.h"
++#include "xrdp.h"
++#include <string.h>
++
++static int client_entries[32];
++static unsigned int images;
++static unsigned int references;
++static struct xrdp_pointer_item last_image;
++
++int
++__wrap_libxrdp_send_pointer(struct xrdp_session *session, int index,
++                          char *data, char *mask, int x, int y, int bpp,
++                          int width, int height)
++{
++    (void)session;
++    ck_assert_int_ge(index, 0);
++    ck_assert_int_lt(index, 32);
++    client_entries[index] = 1;
++    ++images;
++    memset(&last_image, 0, sizeof(last_image));
++    last_image.x = x;
++    last_image.y = y;
++    last_image.bpp = bpp;
++    last_image.width = width;
++    last_image.height = height;
++    if (width > 0 && height > 0)
++    {
++        memcpy(last_image.data, data, ((bpp + 7) / 8) * width * height);
++        memcpy(last_image.mask, mask, width * height / 8);
++    }
++    return 0;
++}
++
++int
++__wrap_libxrdp_set_pointer(struct xrdp_session *session, int index)
++{
++    (void)session;
++    ck_assert_int_ge(index, 0);
++    ck_assert_int_lt(index, 32);
++    ck_assert_msg(client_entries[index], "stale cached pointer %d", index);
++    ++references;
++    return 0;
++}
++
++static struct xrdp_wm *
++fixture(void)
++{
++    struct xrdp_wm *wm = g_new0(struct xrdp_wm, 1);
++    wm->screen = g_new0(struct xrdp_bitmap, 1);
++    wm->screen->child_list = list_create();
++    wm->screen->width = 1920;
++    wm->screen->height = 1080;
++    wm->mm = g_new0(struct xrdp_mm, 1);
++    wm->mm->resize_data = g_new0(struct display_control_monitor_layout_data, 1);
++    wm->client_info = g_new0(struct xrdp_client_info, 1);
++    wm->client_info->pointer_cache_entries = 26;
++    wm->cache = xrdp_cache_create(wm, NULL, wm->client_info);
++    memset(client_entries, 0, sizeof(client_entries));
++    images = references = 0;
++    return wm;
++}
++
++static void
++destroy(struct xrdp_wm *wm)
++{
++    xrdp_cache_delete(wm->cache);
++    list_delete(wm->screen->child_list);
++    g_free(wm->screen);
++    g_free(wm->mm->resize_data);
++    g_free(wm->mm);
++    g_free(wm->client_info);
++    g_free(wm);
++}
++
++static void
++seed_static(struct xrdp_wm *wm)
++{
++    struct xrdp_pointer_item *p = g_new0(struct xrdp_pointer_item, 1);
++    xrdp_cache_add_pointer_static(wm->cache, p, 1);
++    xrdp_cache_add_pointer_static(wm->cache, p, 0);
++    g_free(p);
++}
++
++static void
++backend_pointer(struct xrdp_wm *wm, unsigned char pixel)
++{
++    char data[32 * 32 * 4];
++    char mask[32 * 32 / 8];
++    memset(data, pixel, sizeof(data));
++    memset(mask, 0, sizeof(mask));
++    ck_assert_int_eq(xrdp_wm_pointer(wm, data, mask, 4, 5, 32, 32, 32), 0);
++}
++
++START_TEST(dynamic_pointer_survives_reactivation)
++{
++    struct xrdp_wm *wm = fixture();
++    seed_static(wm);
++    backend_pointer(wm, 0x11);
++    backend_pointer(wm, 0x22);
++    ck_assert_int_eq(wm->screen->pointer, 3);
++    for (int n = 0; n < 32; ++n)
++    {
++        ck_assert_int_eq(xrdp_wm_prepare_pointer_reset(wm), 0);
++        memset(client_entries, 0, sizeof(client_entries));
++        ck_assert_int_eq(xrdp_cache_reset(wm->cache, wm->client_info), 0);
++        const unsigned int before = references;
++        wm->current_pointer = 0;
++        /* Movement while the client is deactivated must send no reference. */
++        ck_assert_int_eq(xrdp_wm_mouse_move(wm, 100, 100), 0);
++        ck_assert_int_eq(references, before);
++        /* A cursor changed by the backend during reset must not get lost. */
++        backend_pointer(wm, 0x22 + n);
++        seed_static(wm);
++        const unsigned int image_count = images;
++        ck_assert_int_eq(xrdp_wm_finish_pointer_reset(wm), 0);
++        ck_assert_int_eq(images, image_count + 1);
++        ck_assert_int_eq(wm->screen->pointer, 2);
++        ck_assert_int_eq(last_image.x, 4);
++        ck_assert_int_eq(last_image.y, 5);
++        ck_assert_int_eq(last_image.width, 32);
++        ck_assert_int_eq(last_image.height, 32);
++        ck_assert_int_eq(last_image.bpp, 32);
++        ck_assert_int_eq((unsigned char)last_image.data[0], 0x22 + n);
++        ck_assert_int_eq((unsigned char)last_image.data[4095], 0x22 + n);
++        wm->current_pointer = 0;
++        ck_assert_int_eq(xrdp_wm_mouse_move(wm, 100, 100), 0);
++        ck_assert_int_eq(references, before + 1);
++    }
++    destroy(wm);
++}
++END_TEST
++
++START_TEST(static_pointer_survives_reactivation)
++{
++    for (int index = 0; index < 2; ++index)
++    {
++        struct xrdp_wm *wm = fixture();
++        seed_static(wm);
++        wm->screen->pointer = index;
++        ck_assert_int_eq(xrdp_wm_prepare_pointer_reset(wm), 0);
++        memset(client_entries, 0, sizeof(client_entries));
++        ck_assert_int_eq(xrdp_cache_reset(wm->cache, wm->client_info), 0);
++        seed_static(wm);
++        ck_assert_int_eq(xrdp_wm_finish_pointer_reset(wm), 0);
++        ck_assert_int_eq(wm->screen->pointer, index);
++        ck_assert_int_eq(wm->current_pointer, index);
++        destroy(wm);
++    }
++}
++END_TEST
++
++START_TEST(saved_dynamic_image_is_resent_without_backend_update)
++{
++    struct xrdp_wm *wm = fixture();
++    seed_static(wm);
++    backend_pointer(wm, 0x33);
++    backend_pointer(wm, 0x77);
++    ck_assert_int_eq(wm->screen->pointer, 3);
++    ck_assert_int_eq(xrdp_wm_prepare_pointer_reset(wm), 0);
++    memset(client_entries, 0, sizeof(client_entries));
++    wm->client_info->pointer_cache_entries = 8;
++    ck_assert_int_eq(xrdp_cache_reset(wm->cache, wm->client_info), 0);
++    seed_static(wm);
++    ck_assert_int_eq(xrdp_wm_finish_pointer_reset(wm), 0);
++    ck_assert_int_eq(wm->screen->pointer, 2);
++    ck_assert_int_eq((unsigned char)last_image.data[0], 0x77);
++    ck_assert_int_eq((unsigned char)last_image.data[4095], 0x77);
++    wm->current_pointer = 0;
++    ck_assert_int_eq(xrdp_wm_mouse_move(wm, 100, 100), 0);
++    destroy(wm);
++}
++END_TEST
++
++START_TEST(invalid_indices_and_changed_capacity_rejected)
++{
++    struct xrdp_wm *wm = fixture();
++    const int invalid[] = {-1, 3, 26, 32, 1000};
++    for (unsigned int n = 0; n < sizeof(invalid) / sizeof(invalid[0]); ++n)
++    {
++        wm->screen->pointer = invalid[n];
++        ck_assert_int_eq(xrdp_wm_prepare_pointer_reset(wm), 1);
++    }
++    seed_static(wm);
++    backend_pointer(wm, 0x44);
++    ck_assert_int_eq(xrdp_wm_prepare_pointer_reset(wm), 0);
++    wm->client_info->pointer_cache_entries = 2;
++    ck_assert_int_eq(xrdp_cache_reset(wm->cache, wm->client_info), 0);
++    ck_assert_int_eq(xrdp_wm_finish_pointer_reset(wm), 1);
++    ck_assert_int_eq(wm->mm->resize_data->pointer_reset, 1);
++    destroy(wm);
++}
++END_TEST
++
++Suite *make_suite_pointer_reset(void)
++{
++    Suite *s = suite_create("pointer reactivation");
++    TCase *tc = tcase_create("cache lifecycle");
++    tcase_add_test(tc, dynamic_pointer_survives_reactivation);
++    tcase_add_test(tc, static_pointer_survives_reactivation);
++    tcase_add_test(tc, saved_dynamic_image_is_resent_without_backend_update);
++    tcase_add_test(tc, invalid_indices_and_changed_capacity_rejected);
++    suite_add_tcase(s, tc);
++    return s;
++}

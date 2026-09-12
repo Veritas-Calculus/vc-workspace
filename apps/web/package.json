@@ -1,5 +1,5 @@
 {
-  "name": "@vc-vdi/web",
+  "name": "@vc-workspace/web",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,7 +7,8 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",
     "check": "tsc -b --pretty false",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:browser": "node tests/recovery.browser.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
@@ -18,6 +19,7 @@
   "devDependencies": {
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "playwright": "1.62.1",
     "typescript": "latest",
     "vite": "latest",
     "vitest": "latest"

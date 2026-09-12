@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Veritas-Calculus/vc-workspace/internal/config"
+	"github.com/Veritas-Calculus/vc-workspace/internal/gateway"
 	"github.com/Veritas-Calculus/vc-workspace/internal/httpapi"
 	"github.com/Veritas-Calculus/vc-workspace/internal/imagebuilder"
 	"github.com/Veritas-Calculus/vc-workspace/internal/oidcauth"
@@ -82,6 +83,8 @@ func main() {
 		NativeCallbackURL: cfg.NativeCallbackURL,
 		OIDC:              oidcService,
 		ImageBuilder:      imageBuilder,
+		IdentityFeatures:  cfg.IdentityFeatures,
+		NativeGateway:     cfg.NativeGateway,
 	})
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -94,6 +97,19 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	go api.RunBackgroundMaintenance(ctx)
+	go api.RunPVEJobMaintenance(ctx)
+	var gatewayStopped chan struct{}
+	if cfg.GatewayControl != nil {
+		gatewayStopped = make(chan struct{})
+		go func() {
+			defer close(gatewayStopped)
+			if err := gateway.RunControlService(ctx, *cfg.GatewayControl, database, logger); err != nil {
+				logger.Error("Gateway control listener stopped", "error", err)
+				stop()
+			}
+		}()
+	}
 	go func() {
 		logger.Info("control plane listening", "address", cfg.HTTPAddr)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -107,5 +123,12 @@ func main() {
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Error("HTTP server shutdown failed", "error", err)
+	}
+	if gatewayStopped != nil {
+		select {
+		case <-gatewayStopped:
+		case <-shutdownCtx.Done():
+			logger.Error("Gateway control listener shutdown timed out")
+		}
 	}
 }

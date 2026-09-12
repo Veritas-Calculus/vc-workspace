@@ -119,9 +119,10 @@ paths:
   /auth/native/logout:
     post:
       operationId: logoutNative
+      description: Atomically invalidates this native token and durably queues this user's Guest identities for account disable and OS logoff, including logins retained after ordinary disconnect. Remote cleanup is retried by maintenance and may still be pending when 204 is returned.
       security: [{ nativeBearer: [] }]
       responses:
-        '204': { description: Native session revoked }
+        '204': { description: Native token revoked and Guest cleanup durably queued }
         '401': { $ref: '#/components/responses/Error' }
   /me:
     get:
@@ -130,6 +131,82 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/WebSession' }
         '401': { $ref: '#/components/responses/Error' }
+  /me/password:
+    put:
+      operationId: changeCurrentUserPassword
+      description: Changes a local platform password, retains the current Web session, and revokes the user's other Web, native, authorization-code, and active desktop sessions. OIDC passwords remain owned by the identity provider.
+      security: [{ cookieAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/CSRFToken' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              additionalProperties: false
+              properties:
+                current_password: { type: string, writeOnly: true }
+                new_password: { type: string, minLength: 12, maxLength: 128, writeOnly: true }
+      responses:
+        '204': { description: Password changed and other sessions revoked }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /api-tokens:
+    get:
+      operationId: listAPITokens
+      description: Lists metadata for the current administrator's non-interactive API credentials. Secret values are never returned again.
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200':
+          description: API credential metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [api_tokens]
+                properties:
+                  api_tokens: { type: array, items: { $ref: '#/components/schemas/APIToken' } }
+        '403': { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createAPIToken
+      description: Creates a time-bounded administrator API credential and returns its secret once. API credentials cannot create more credentials.
+      security: [{ cookieAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/CSRFToken' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, expires_in_days]
+              additionalProperties: false
+              properties:
+                name: { type: string, minLength: 1, maxLength: 80 }
+                expires_in_days: { type: integer, minimum: 1, maximum: 90 }
+      responses:
+        '201':
+          description: API credential and one-time secret
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/APITokenCredential' }
+        '403': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /api-tokens/{id}:
+    delete:
+      operationId: revokeAPIToken
+      description: Permanently revokes one API credential owned by the current administrator.
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/CSRFToken' }
+      responses:
+        '204': { description: API credential revoked }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
   /infrastructure:
     get:
       operationId: getInfrastructure
@@ -158,7 +235,7 @@ paths:
     get:
       operationId: getAccessControl
       description: Lists users, AI Agent principals, registered managed desktops, and explicit assignments. Platform administrators only.
-      security: [{ cookieAuth: [] }]
+      security: [{ cookieAuth: [] }, { apiTokenBearer: [] }]
       responses:
         '200':
           description: Current desktop authorization model
@@ -169,7 +246,7 @@ paths:
   /access-control/reconcile:
     post:
       operationId: reconcileManagedDesktops
-      description: Reconciles the desktop registry from live, non-template QEMU VMs carrying the vc-vdi PVE tag.
+      description: Reconciles the desktop registry from live, non-template QEMU VMs carrying the vc-workspace PVE tag. The former vc-vdi tag remains readable during migration.
       security: [{ cookieAuth: [] }]
       parameters: [{ $ref: '#/components/parameters/CSRFToken' }]
       responses:
@@ -233,6 +310,30 @@ paths:
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
+  /users/{id}/password:
+    put:
+      operationId: resetLocalUserPassword
+      description: Resets another local user's platform password and invalidates all of that user's Web, native, and authorization-code sessions. Active desktop connections and retained Guest logins are queued for account disable and OS logoff; remote cleanup is asynchronous. OIDC passwords cannot be reset here.
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/CSRFToken' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_password]
+              additionalProperties: false
+              properties:
+                new_password: { type: string, minLength: 12, maxLength: 128, writeOnly: true }
+      responses:
+        '204': { description: Password reset, platform sessions revoked, and Guest cleanup queued }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
   /agents:
     post:
       operationId: createAgentPrincipal
@@ -306,13 +407,13 @@ paths:
         '404': { $ref: '#/components/responses/Error' }
   /desktop-assignments/{subject_type}/{subject_id}/{vmid}:
     parameters:
-      - { in: path, name: subject_type, required: true, schema: { type: string, enum: [user, agent] } }
+      - { in: path, name: subject_type, required: true, schema: { type: string, enum: [user, group, agent] } }
       - { in: path, name: subject_id, required: true, schema: { type: string } }
       - { in: path, name: vmid, required: true, schema: { type: integer, minimum: 1 } }
-      - { $ref: '#/components/parameters/CSRFToken' }
+      - { in: header, name: X-CSRF-Token, required: false, description: Required for cookie authentication and omitted for API token authentication, schema: { type: string } }
     put:
       operationId: assignDesktop
-      security: [{ cookieAuth: [] }]
+      security: [{ cookieAuth: [] }, { apiTokenBearer: [] }]
       responses:
         '200':
           description: Desktop assigned, or an existing identical assignment returned
@@ -321,12 +422,247 @@ paths:
               schema: { $ref: '#/components/schemas/DesktopAssignment' }
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
     delete:
       operationId: removeDesktopAssignment
       description: Removes access. Removing an Agent assignment immediately revokes its active lease for that desktop.
-      security: [{ cookieAuth: [] }]
+      security: [{ cookieAuth: [] }, { apiTokenBearer: [] }]
       responses:
         '204': { description: Assignment removed }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /managed-desktops/{vmid}/native-recovery/{user_id}:
+    post:
+      operationId: recoverNativeAccount
+      description: Administrator-only Linux Native recovery after database restore. Rechecks the same immutable Guest identity under the desktop lock; both database and Guest must be settled revoked, with Guest ahead and no live writers, processes or outstanding database control work. Atomically appends a recovery receipt and advances the database only. Never resets a Guest fence or password. Changed state and stale repeats return 409; inspect again rather than blindly retrying.
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/CSRFToken' }
+        - { in: path, name: vmid, required: true, schema: { type: integer, minimum: 1 } }
+        - { in: path, name: user_id, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [database_revision, guest_revision, reason]
+              properties:
+                database_revision: { type: integer, format: int64, minimum: 1 }
+                guest_revision: { type: integer, format: int64, minimum: 2 }
+                reason: { type: string, minLength: 1, maxLength: 500 }
+      responses:
+        '200':
+          description: Database advanced with an atomic receipt; no Guest credentials changed. This does not authorize a desktop connection.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user_id, database_revision, guest_revision, status]
+                properties:
+                  user_id: { type: string }
+                  database_revision: { type: integer, format: int64 }
+                  guest_revision: { type: integer, format: int64 }
+                  status: { type: string, enum: [aligned_closed] }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /managed-desktops/{vmid}/native-recovery:
+    get:
+      operationId: inspectNativeRecovery
+      description: Administrator-only diagnostic under the desktop control lock. Requires a running managed desktop. Reads pinned Native account identities and Guest lifecycle state without changing credentials or importing versions. Results are transient observations, not recovery authorization. Guest errors and unsupported platforms are reported per account as inspection_unavailable.
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { in: path, name: vmid, required: true, schema: { type: integer, minimum: 1 } }
+      responses:
+        '200':
+          description: Non-cacheable account observations. Does not include passwords, token hashes, connection IDs or Guest usernames.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [vmid, accounts]
+                properties:
+                  vmid: { type: integer }
+                  accounts:
+                    type: array
+                    items:
+                      type: object
+                      required: [user_id, database_revision, status]
+                      properties:
+                        user_id: { type: string }
+                        database_revision: { type: integer, format: int64 }
+                        guest_revision: { type: integer, format: int64 }
+                        status: { type: string, enum: [aligned_closed, guest_ahead_closed, identity_mismatch, unversioned, lifecycle_mismatch, inspection_unavailable] }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /managed-desktops/{vmid}/identity:
+    put:
+      operationId: updateManagedDesktopIdentity
+      description: Selects personal or shared access and the Guest OS identity profile. A personal desktop has exactly one owner.
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { in: path, name: vmid, required: true, schema: { type: integer, minimum: 1 } }
+        - { $ref: '#/components/parameters/CSRFToken' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [access_mode]
+              additionalProperties: false
+              properties:
+                access_mode: { type: string, enum: [personal, shared] }
+                owner_user_id: { type: string, description: Required for personal desktops and ignored for shared desktops }
+                identity_profile_id: { type: string, description: Empty selects the platform managed-local profile }
+      responses:
+        '200':
+          description: Updated managed desktop
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ManagedDesktop' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /managed-desktops/{vmid}/identity/reconcile:
+    post:
+      operationId: reconcileManagedDesktopIdentity
+      description: Applies the selected profile through QEMU Guest Agent. Join passwords and OIDC client secrets are one-time inputs sent over QGA stdin and are never persisted or audited.
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { in: path, name: vmid, required: true, schema: { type: integer, minimum: 1 } }
+        - { $ref: '#/components/parameters/CSRFToken' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                join_username: { type: string }
+                join_password: { type: string, writeOnly: true }
+                client_secret: { type: string, writeOnly: true }
+      responses:
+        '200':
+          description: Reconciled desktop; restart_required means the Guest must restart before the profile is active
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ManagedDesktop' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /identity-profiles/{id}:
+    put:
+      operationId: putIdentityProfile
+      description: Creates or updates a structured Guest OS identity profile. Inline passwords, tokens, client secrets, private keys, and multiline values are rejected.
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$' } }
+        - { $ref: '#/components/parameters/CSRFToken' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IdentityProfileInput' }
+      responses:
+        '200':
+          description: Saved identity profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IdentityProfile' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /identity-groups:
+    post:
+      operationId: createIdentityGroup
+      description: Creates a local group or a group managed by an external SCIM-style synchronizer.
+      security: [{ cookieAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/CSRFToken' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, display_name, source]
+              additionalProperties: false
+              properties:
+                id: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$' }
+                display_name: { type: string, minLength: 1, maxLength: 128 }
+                source: { type: string, enum: [local, scim] }
+                enabled: { type: boolean, default: true }
+      responses:
+        '201':
+          description: Group created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IdentityGroup' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /identity-groups/{id}:
+    patch:
+      operationId: updateIdentityGroup
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/CSRFToken' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              additionalProperties: false
+              properties:
+                enabled: { type: boolean }
+      responses:
+        '200':
+          description: Updated group
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IdentityGroup' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /identity-groups/{id}/members/{user_id}:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: string } }
+      - { in: path, name: user_id, required: true, schema: { type: string } }
+      - { $ref: '#/components/parameters/CSRFToken' }
+    put:
+      operationId: putIdentityGroupMembership
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200':
+          description: Local group membership saved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IdentityGroupMembership' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteIdentityGroupMembership
+      security: [{ cookieAuth: [] }]
+      responses:
+        '204': { description: Group membership removed }
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
   /image-profiles/{id}:
@@ -469,24 +805,120 @@ paths:
               type: object
               required: [name, source_vmid, target_node, storage, full, gpu_profile_id]
               properties:
-                name: { type: string, pattern: '^vc-vdi-[a-zA-Z0-9-]*$', maxLength: 63 }
+                name: { type: string, pattern: '^vc-workspace-[a-zA-Z0-9-]*$', maxLength: 63 }
                 source_vmid: { type: integer, minimum: 1 }
                 target_node: { type: string }
                 storage: { type: string, description: Empty for linked clone default }
                 full: { type: boolean }
                 gpu_profile_id: { type: string, description: Enabled GPU profile; use none for a CPU-only desktop }
+                validation_image_profile_id:
+                  type: string
+                  description: Explicit validation mode. Must match an enabled testing image and source_vmid, and requires full=true. Clone success does not promote the image to ready. Without this field, registered images must be enabled and ready. Multiple image profiles referencing the source template are rejected with image_template_ambiguous (409) in either mode.
       responses:
         '202': { $ref: '#/components/responses/Job' }
         '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
   /jobs/{id}:
     get:
       operationId: getJob
+      description: Administrator-only current job observation, always no-store. Use this endpoint to resolve uncertain clone or recovery responses before retrying. Running PVE jobs may be reconciled through the normal completion path.
       security: [{ cookieAuth: [] }]
       parameters:
         - { in: path, name: id, required: true, schema: { type: string } }
       responses:
         '200': { $ref: '#/components/responses/Job' }
         '404': { $ref: '#/components/responses/Error' }
+  /jobs/{id}/clone-candidates:
+    get:
+      operationId: discoverCloneTaskCandidates
+      description: Administrator-only bounded discovery for an accepted clone reservation without a task handle. Uses the persisted source node, source VMID and creation time (-30 seconds to +15 minutes), and filters by the server-recorded original PVE principal including Token ID. Legacy jobs without the identity or target specification return 409 rather than guessing from current credentials. Each matching task is independently inspected and its immutable fields compared with the listing. Target inventory and configuration are observed in the same request, with a 20-second upstream budget; incomplete or contradictory task evidence returns 503 without partial results. These observations are not an atomic snapshot or proof that a task created the target, even for a unique stopped/OK candidate and matching marker. No task adoption or access changes occur.
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Complete bounded candidate list; no-store. UPIDs contain PVE principal identifiers and must not be shared publicly.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [job_id, candidates, target_status]
+                properties:
+                  job_id: { type: string }
+                  target_status: { type: string, enum: [target_absent, target_mismatch, marker_matches, target_locked] }
+                  candidates:
+                    type: array
+                    maxItems: 50
+                    items:
+                      type: object
+                      required: [upid, start_time, status, log_target_status]
+                      properties:
+                        upid: { type: string }
+                        start_time: { type: integer, format: int64 }
+                        status: { type: string, enum: [running, stopped] }
+                        exit_status: { type: string, description: Present for stopped tasks; only OK indicates task success, not target ownership. }
+                        log_target_status:
+                          type: string
+                          enum: [matches, mismatch, unrecognized]
+                          description: Compares the explicit source/target declaration in the first 32 task log lines with the reserved VMIDs. Unrecognized includes older formats without a declaration. This records task intent, not creation success or immutable ownership. Raw logs are not returned.
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /jobs/{id}/clone-recovery:
+    post:
+      operationId: recoverCloneTask
+      description: Administrator cookie session and CSRF required. Re-inspects the selected task under the target desktop control lock with a 30-second request budget. Requires an accepted reservation without a handle, original principal and target specification, matching source/principal/time window, stopped/OK task, explicit matching log target, and an unlocked QEMU target with the original name and job marker. Atomically records the handle as running with an audit entry, then starts normal clone reconciliation; this may apply the reserved GPU configuration. Does not replay the clone request. Repeated or changed-state submissions return 409; after an uncertain response read the original job before retrying. Legacy or unsupported log evidence is not guessed.
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+        - { in: header, name: X-CSRF-Token, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [upid, reason]
+              properties:
+                upid: { type: string, maxLength: 1024 }
+                reason: { type: string, minLength: 1, maxLength: 500 }
+      responses:
+        '202':
+          description: Handle and recovery audit committed; normal clone reconciliation scheduled. No-store.
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /jobs/{id}/clone-inspection:
+    get:
+      operationId: inspectCloneTarget
+      description: Administrator-only read-only target inspection. A matching mutable marker does not prove completion or authorize task adoption. Does not update the Job or PVE resources.
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Current target evidence; response is not cacheable
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [job_id, target_vmid, status]
+                properties:
+                  job_id: { type: string }
+                  target_vmid: { type: integer }
+                  status: { type: string, enum: [target_absent, target_mismatch, target_locked, marker_matches] }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
   /jobs:
     get:
       operationId: listJobs
@@ -524,6 +956,11 @@ paths:
       security: [{ cookieAuth: [] }]
       parameters:
         - { in: path, name: vmid, required: true, schema: { type: integer, minimum: 1 } }
+        - in: header
+          name: X-VC-Workspace-Desktop-Scale
+          required: false
+          description: Client backing scale in percent. Linux guests map this to Xft DPI because current xrdp releases do not apply RDP DesktopScaleFactor to Xorg.
+          schema: { type: integer, enum: [100, 200], default: 100 }
         - { in: path, name: action, required: true, schema: { type: string, enum: [start, stop] } }
         - { $ref: '#/components/parameters/CSRFToken' }
         - { $ref: '#/components/parameters/IdempotencyKey' }
@@ -557,10 +994,13 @@ paths:
           application/json:
             schema:
               type: object
-              required: [privilege_mode]
+              required: [privilege_mode, clipboard_redirection, drive_redirection, managed_background]
               additionalProperties: false
               properties:
                 privilege_mode: { type: string, enum: [standard, local_admin] }
+                clipboard_redirection: { type: boolean, description: Allows text clipboard redirection; file clipboard transfer remains governed by drive_redirection }
+                drive_redirection: { type: boolean, description: Allows explicitly mapped client folders and RDP device-drive channels }
+                managed_background: { type: boolean, description: Re-applies the VC Workspace background at user sign-in }
       responses:
         '200':
           description: Saved policy and its current enforcement state
@@ -592,10 +1032,19 @@ paths:
   /native/desktops/{vmid}/connections:
     post:
       operationId: createNativeDesktopConnection
-      description: Enforces the desired desktop access policy, then creates an RDP connection descriptor and rotates the guest desktop password for each issuance.
+      description: >-
+        Enforces the desired desktop access policy, then creates a connection descriptor with an immutable policy snapshot.
+        When Native Gateway routing is configured, it is mandatory: a capable client receives rdp-gateway and a one-time ticket
+        bound to the trusted Guest certificate, exact initiating Native session and applied policy. OS acknowledgement,
+        logical connection and ticket commit atomically. Errors never fall back to direct RDP. Gateway routing currently
+        requires a managed-local Linux Guest; Windows is rejected before credential changes.
       security: [{ nativeBearer: [] }]
       parameters:
         - { in: path, name: vmid, required: true, schema: { type: integer, minimum: 1 } }
+        - in: header
+          name: X-VC-Workspace-Transport
+          description: Required when the deployment mandates Gateway routing; unsupported clients are rejected before Guest changes. This declares protocol capability, not authorization or a user-selected route.
+          schema: { type: string, const: vc-workspace-rdp.v1 }
       responses:
         '201':
           description: RDP connection descriptor. The response must not be cached or logged.
@@ -607,6 +1056,18 @@ paths:
               schema: { $ref: '#/components/schemas/DesktopConnection' }
         '401': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
+        '426': { $ref: '#/components/responses/Error' }
+  /native/connections/{id}:
+    delete:
+      operationId: releaseNativeDesktopConnection
+      description: Revokes the broker-issued Guest credential and closes this persisted desktop connection session. Ordinary disconnect retains OS applications for reconnect until the Guest binding expires or authorization is revoked. Retained logins remain subject to account-disable and OS-logoff maintenance. Repeated release is safe.
+      security: [{ nativeBearer: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses:
+        '204': { description: Connection released or already closed }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
   /agent/desktops:
     get:
       operationId: listAgentDesktops
@@ -663,6 +1124,7 @@ paths:
         '404': { $ref: '#/components/responses/Error' }
     delete:
       operationId: releaseAgentDesktopLease
+      description: Releases Broker control and atomically queues Guest authority revocation. Guest synchronization is retried durably if PVE is unavailable; a successful response does not guarantee immediate Guest-side fencing during a network partition.
       security: [{ internalBearer: [] }]
       responses:
         '200': { $ref: '#/components/responses/DesktopLease' }
@@ -679,16 +1141,42 @@ paths:
       responses:
         '202': { $ref: '#/components/responses/Job' }
         '409': { $ref: '#/components/responses/Error' }
+  /agent/desktop-leases/{id}/computer-actions:
+    post:
+      operationId: executeAgentComputerAction
+      description: Executes one bounded observation or input action in an Agent-specific Linux interactive session. The first action provisions a managed local account and starts xrdp/Xorg without a human client. The whole request, including bootstrap and lock waits, is bounded to 65 seconds; timeout_ms independently bounds the action worker. Guest V2 support is required, with no shared-vdi fallback. Per-Agent Windows sessions are not yet supported. The current lease control_epoch is mandatory; response bodies are never cacheable and are limited to 16 MiB.
+      security: [{ internalBearer: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+        - { in: query, name: agent_id, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ComputerActionRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/ComputerAction' }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+        '504': { $ref: '#/components/responses/Error' }
 components:
   securitySchemes:
     cookieAuth:
       type: apiKey
       in: cookie
-      name: vc_vdi_session
+      name: vc_workspace_session
     nativeBearer:
       type: http
       scheme: bearer
       description: Revocable native client session
+    apiTokenBearer:
+      type: http
+      scheme: bearer
+      description: Time-bounded administrator API credential with the vcwi_ prefix, intended for Terraform/OpenTofu and other non-interactive control-plane clients
     internalBearer:
       type: http
       scheme: bearer
@@ -703,6 +1191,7 @@ components:
       in: header
       name: Idempotency-Key
       required: true
+      description: Scoped to the authenticated principal, HTTP method and path. Identical JSON replays return the existing job only after current authorization is checked. Reusing the key with a different request body returns 409. Keys are not a substitute for authorization.
       schema: { type: string, minLength: 8, maxLength: 128 }
   requestBodies:
     LocalLogin:
@@ -741,6 +1230,14 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/DesktopLease' }
+    ComputerAction:
+      description: A bounded Computer Use result. Screenshot data and accessibility values must not be logged by intermediaries.
+      headers:
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ComputerActionResponse' }
     DesktopList:
       description: Managed desktops
       content:
@@ -749,7 +1246,7 @@ components:
   schemas:
     System:
       type: object
-      required: [name, pve_configured, database_configured, initialized, oidc_configured, oidc_name, uptime_seconds]
+      required: [name, pve_configured, database_configured, initialized, oidc_configured, oidc_name, uptime_seconds, identity_capabilities]
       properties:
         name: { type: string }
         pve_configured: { type: boolean }
@@ -758,14 +1255,24 @@ components:
         oidc_configured: { type: boolean }
         oidc_name: { type: string }
         uptime_seconds: { type: integer, minimum: 0 }
+        identity_capabilities:
+          type: object
+          required: [managed_local, linux_sssd, windows_ad, linux_sssd_oidc, windows_entra_rdp]
+          properties:
+            managed_local: { type: boolean, const: true }
+            linux_sssd: { type: boolean, const: true }
+            windows_ad: { type: boolean, const: true }
+            linux_sssd_oidc: { type: boolean, description: Experimental server gate }
+            windows_entra_rdp: { type: boolean, description: Experimental server and client capability gate }
     User:
       type: object
-      required: [id, username, display_name, role]
+      required: [id, username, display_name, role, identity_kind]
       properties:
         id: { type: string }
         username: { type: string }
         display_name: { type: string }
         role: { type: string, enum: [platform_admin, user] }
+        identity_kind: { type: string, enum: [local, oidc] }
     UserAccount:
       type: object
       required: [id, username, display_name, role, disabled, identity_kind, created_at]
@@ -794,15 +1301,38 @@ components:
       properties:
         agent: { $ref: '#/components/schemas/AgentPrincipal' }
         access_token: { type: string, writeOnly: true, pattern: '^vcwa_' }
+    APIToken:
+      type: object
+      required: [id, name, expires_at, created_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        expires_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        last_used_at: { type: string, format: date-time }
+    APITokenCredential:
+      type: object
+      required: [api_token, access_token]
+      properties:
+        api_token: { $ref: '#/components/schemas/APIToken' }
+        access_token: { type: string, writeOnly: true, pattern: '^vcwi_' }
     ManagedDesktop:
       type: object
-      required: [vmid, display_name, node, present, enabled, first_seen_at, last_seen_at, updated_at]
+      required: [vmid, display_name, node, os_family, present, enabled, access_mode, identity_state, identity_updated_at, first_seen_at, last_seen_at, updated_at]
       properties:
         vmid: { type: integer, minimum: 1 }
         display_name: { type: string }
         node: { type: string }
+        os_family: { type: string, enum: [linux, windows, unknown] }
         present: { type: boolean }
         enabled: { type: boolean }
+        access_mode: { type: string, enum: [personal, shared] }
+        owner_user_id: { type: string }
+        identity_profile_id: { type: string }
+        identity_state: { type: string, enum: [pending, applied, restart_required, failed] }
+        applied_identity_profile_id: { type: string }
+        identity_last_error: { type: string }
+        identity_updated_at: { type: string, format: date-time }
         first_seen_at: { type: string, format: date-time }
         last_seen_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -810,14 +1340,14 @@ components:
       type: object
       required: [subject_type, subject_id, desktop_vmid]
       properties:
-        subject_type: { type: string, enum: [user, agent] }
+        subject_type: { type: string, enum: [user, group, agent] }
         subject_id: { type: string }
         desktop_vmid: { type: integer, minimum: 1 }
         created_by: { type: string }
         created_at: { type: string, format: date-time }
     AccessControl:
       type: object
-      required: [users, agents, desktops, assignments]
+      required: [users, agents, desktops, assignments, desktop_leases, groups, group_memberships, identity_profiles, guest_identity_bindings, api_tokens]
       properties:
         users:
           type: array
@@ -831,6 +1361,85 @@ components:
         assignments:
           type: array
           items: { $ref: '#/components/schemas/DesktopAssignment' }
+        desktop_leases:
+          type: array
+          description: Non-expired active AI Agent desktop control leases visible to administrators.
+          items: { $ref: '#/components/schemas/DesktopLease' }
+        groups:
+          type: array
+          items: { $ref: '#/components/schemas/IdentityGroup' }
+        group_memberships:
+          type: array
+          items: { $ref: '#/components/schemas/IdentityGroupMembership' }
+        identity_profiles:
+          type: array
+          items: { $ref: '#/components/schemas/IdentityProfile' }
+        guest_identity_bindings:
+          type: array
+          items: { $ref: '#/components/schemas/GuestIdentityBinding' }
+        api_tokens:
+          type: array
+          description: Metadata only for the current administrator's IaC API credentials.
+          items: { $ref: '#/components/schemas/APIToken' }
+    IdentityGroup:
+      type: object
+      required: [id, display_name, source, enabled, member_count, created_at, updated_at]
+      properties:
+        id: { type: string }
+        provider_id: { type: string }
+        external_id: { type: string }
+        display_name: { type: string }
+        source: { type: string, enum: [local, oidc, scim] }
+        enabled: { type: boolean }
+        member_count: { type: integer, minimum: 0 }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    IdentityGroupMembership:
+      type: object
+      required: [group_id, user_id, source, created_at, updated_at]
+      properties:
+        group_id: { type: string }
+        user_id: { type: string }
+        source: { type: string, enum: [local, oidc, scim] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    IdentityProfileInput:
+      type: object
+      required: [display_name, platform, mode, enabled, experimental, config]
+      additionalProperties: false
+      properties:
+        display_name: { type: string, minLength: 1, maxLength: 128 }
+        platform: { type: string, enum: [linux, windows] }
+        mode: { type: string, enum: [managed_local, linux_sssd_ad, linux_sssd_freeipa, linux_sssd_ldap, linux_sssd_oidc, windows_ad, windows_entra] }
+        enabled: { type: boolean }
+        experimental: { type: boolean, description: Must be true for linux_sssd_oidc and windows_entra }
+        config:
+          type: object
+          description: Mode-specific, single-line, non-secret configuration. See the identity architecture document for required keys.
+          additionalProperties: true
+    IdentityProfile:
+      allOf:
+        - type: object
+          required: [id, created_at, updated_at]
+          properties:
+            id: { type: string }
+            created_by: { type: string }
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
+        - { $ref: '#/components/schemas/IdentityProfileInput' }
+    GuestIdentityBinding:
+      type: object
+      required: [desktop_vmid, user_id, guest_username, state, created_at, updated_at]
+      properties:
+        desktop_vmid: { type: integer, minimum: 1 }
+        user_id: { type: string }
+        profile_id: { type: string }
+        guest_username: { type: string }
+        state: { type: string, enum: [provisioning, ready, failed, disabled] }
+        last_error: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     WebSession:
       type: object
       required: [user, csrf_token]
@@ -1086,7 +1695,7 @@ components:
         node: { type: string }
         status: { type: string }
         template: { type: boolean }
-        managed: { type: boolean, description: Whether VC Workspace permits desktop lifecycle operations for this non-template QEMU VM, derived from the vc-vdi PVE tag }
+        managed: { type: boolean, description: Whether VC Workspace permits desktop lifecycle operations for this non-template QEMU VM, derived from the vc-workspace PVE tag or its read-only migration alias }
         cpu_count: { type: integer }
         memory_total: { type: integer }
     DesktopList:
@@ -1098,22 +1707,63 @@ components:
           items: { $ref: '#/components/schemas/VirtualMachine' }
     DesktopConnection:
       type: object
-      required: [id, protocol, host, port, username, password, issued_at, desktop_id]
+      required: [id, protocol, host, port, username, password, issued_at, expires_at, desktop_id, session_policy]
       properties:
         id: { type: string }
-        protocol: { type: string, const: rdp }
+        protocol: { type: string, enum: [rdp, rdp-gateway] }
         host: { type: string }
         port: { type: integer, const: 3389 }
         username: { type: string }
         password: { type: string, writeOnly: true }
         issued_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time, description: Broker-enforced connection credential expiry }
         desktop_id: { type: string }
+        session_policy: { $ref: '#/components/schemas/NativeSessionPolicy' }
+        gateway: { $ref: '#/components/schemas/NativeGatewayConnection' }
+      allOf:
+        - if:
+            properties:
+              protocol: { const: rdp-gateway }
+          then:
+            required: [gateway]
+          else:
+            not:
+              required: [gateway]
+    NativeGatewayConnection:
+      type: object
+      additionalProperties: false
+      required: [url, subprotocol, ticket, expires_at, certificate_sha256]
+      properties:
+        url: { type: string, format: uri, pattern: '^wss://[^/?#]+/gateway/v1/rdp$' }
+        subprotocol: { type: string, const: vc-workspace-rdp.v1 }
+        ticket:
+          type: string
+          pattern: '^gwt_[A-Za-z0-9_-]{43}$'
+          description: Canonical base64url 256-bit one-time secret. Send only in the first WebSocket text frame, never URL/header/log. A lost response requires a fresh logical connection, not a ticket replay.
+        expires_at: { type: string, format: date-time, description: Ticket redemption deadline, at most 30 seconds; not the OS desktop expiry }
+        certificate_sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: SHA-256 of the DER Guest RDP leaf observed through trusted PVE/QGA. Client must pin the end-to-end RDP TLS peer even when dialing a local tunnel; no localhost TOFU or direct fallback.
+    NativeSessionPolicy:
+      type: object
+      required: [version, revision, clipboard_redirection, drive_redirection, managed_background, hash]
+      properties:
+        version: { type: integer, const: 1 }
+        revision: { type: integer, minimum: 1 }
+        clipboard_redirection: { type: boolean }
+        drive_redirection: { type: boolean }
+        managed_background: { type: boolean }
+        hash: { type: string, pattern: '^sha256:[0-9a-f]{64}$' }
     DesktopAccessPolicy:
       type: object
-      required: [vmid, privilege_mode, desired_revision, applied_revision, state, os_family, updated_at]
+      required: [vmid, privilege_mode, clipboard_redirection, drive_redirection, managed_background, desired_revision, applied_revision, state, os_family, updated_at]
       properties:
         vmid: { type: integer, minimum: 1 }
         privilege_mode: { type: string, enum: [standard, local_admin] }
+        clipboard_redirection: { type: boolean }
+        drive_redirection: { type: boolean }
+        managed_background: { type: boolean }
         desired_revision: { type: integer, minimum: 1 }
         applied_revision: { type: integer, minimum: 0 }
         state: { type: string, enum: [pending, applied, failed] }
@@ -1183,10 +1833,132 @@ components:
         agent_id: { type: string }
         desktop_id: { type: string }
         state: { type: string, enum: [active, released, expired, revoked] }
-        control_epoch: { type: integer, minimum: 1 }
+        control_epoch:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Monotonic VM-scoped authority version. New leases do not reset to 1; use the exact value returned with the current active lease. A failed or uncertain bootstrap can revoke the lease, requiring reacquisition.
         expires_at: { type: string, format: date-time }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    ComputerActionRequest:
+      type: object
+      additionalProperties: false
+      required: [control_epoch, operation]
+      properties:
+        control_epoch: { type: integer, minimum: 1 }
+        operation: { type: string, enum: [screenshot, accessibility_snapshot, mouse, key, type_text] }
+        timeout_ms: { type: integer, minimum: 250, maximum: 15000, default: 5000 }
+        screenshot:
+          type: object
+          additionalProperties: false
+          properties:
+            max_width: { type: integer, minimum: 320, maximum: 3840, default: 1600 }
+        accessibility:
+          type: object
+          additionalProperties: false
+          properties:
+            max_depth: { type: integer, minimum: 1, maximum: 10, default: 6 }
+            max_nodes: { type: integer, minimum: 1, maximum: 500, default: 300 }
+        mouse:
+          type: object
+          additionalProperties: false
+          required: [action]
+          properties:
+            action: { type: string, enum: [move, click, scroll] }
+            x: { type: integer, minimum: 0, maximum: 16384 }
+            y: { type: integer, minimum: 0, maximum: 16384 }
+            button: { type: string, enum: [left, right, middle] }
+            delta_x: { type: integer, minimum: -100, maximum: 100 }
+            delta_y: { type: integer, minimum: -100, maximum: 100 }
+        key:
+          type: object
+          additionalProperties: false
+          required: [key]
+          properties:
+            key:
+              type: string
+              description: An allowlisted named key, or one ASCII letter/digit when at least one modifier is present.
+              pattern: '^(enter|escape|tab|backspace|delete|space|up|down|left|right|home|end|page_up|page_down|f([1-9]|1[0-2])|[a-z0-9])$'
+            modifiers:
+              type: array
+              uniqueItems: true
+              maxItems: 4
+              items: { type: string, enum: [control, alt, shift, meta] }
+        text:
+          type: object
+          additionalProperties: false
+          required: [value]
+          properties:
+            value:
+              type: string
+              minLength: 1
+              maxLength: 4096
+              writeOnly: true
+              description: UTF-8 text limited to 4096 encoded bytes by the server; never written to audit records.
+            sensitive: { type: boolean, default: false }
+      oneOf:
+        - required: [screenshot]
+        - required: [accessibility]
+        - required: [mouse]
+        - required: [key]
+        - required: [text]
+    ComputerActionResponse:
+      type: object
+      required: [schema_version, request_id, ok]
+      properties:
+        schema_version: { type: integer, const: 1 }
+        request_id: { type: string }
+        ok: { type: boolean }
+        error: { type: string, maxLength: 240 }
+        screenshot:
+          type: object
+          required: [content_type, data, width, height, sha256]
+          properties:
+            content_type: { type: string, const: image/jpeg }
+            data: { type: string, format: byte }
+            width: { type: integer, minimum: 1, maximum: 3840 }
+            height: { type: integer, minimum: 1 }
+            sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+            desktop_bounds:
+              type: object
+              description: Captured monitor in native input coordinates before screenshot resizing. Absent on old Guest agents; MCP screenshot requires an updated agent.
+              required: [x, y, width, height]
+              properties:
+                x: { type: integer }
+                y: { type: integer }
+                width: { type: integer, minimum: 1 }
+                height: { type: integer, minimum: 1 }
+        accessibility:
+          type: object
+          required: [source, truncated, nodes]
+          properties:
+            source: { type: string, enum: [window_enumeration, linux_atspi, windows_uia] }
+            truncated: { type: boolean }
+            nodes:
+              type: array
+              maxItems: 500
+              items: { $ref: '#/components/schemas/AccessibilityNode' }
+        input:
+          type: object
+          required: [applied]
+          properties:
+            applied: { type: boolean }
+    AccessibilityNode:
+      type: object
+      required: [id, role, enabled]
+      properties:
+        id: { type: string }
+        parent_id: { type: string }
+        role: { type: string }
+        name: { type: string }
+        value: { type: string }
+        x: { type: integer }
+        y: { type: integer }
+        width: { type: integer, minimum: 0 }
+        height: { type: integer, minimum: 0 }
+        focused: { type: boolean }
+        enabled: { type: boolean }
     Error:
       type: object
       required: [error]

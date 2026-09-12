@@ -1,0 +1,191 @@
+openapi: 3.1.0
+info:
+  title: VC Workspace Session Gateway API
+  version: 0.1.0
+  description: >-
+    Standalone TLS Gateway and its dedicated mTLS control-plane listener.
+    These paths are not mounted below the public control-plane /api/v1 mux.
+    The default native desktop descriptor does not yet issue Gateway tickets.
+servers:
+  - url: https://{gatewayHost}
+    variables:
+      gatewayHost:
+        default: gateway.example.invalid
+paths:
+  /health:
+    get:
+      operationId: getGatewayHealth
+      responses:
+        '204': { description: TLS Gateway HTTP process is responding }
+  /ready:
+    get:
+      operationId: getGatewayReadiness
+      responses:
+        '204': { description: Enrolled Gateway mTLS identity can reach the control authority and database }
+        '503': { $ref: '#/components/responses/GatewayError' }
+  /gateway/v1/rdp:
+    get:
+      operationId: openGatewayRDPTransport
+      description: >-
+        Native-only HTTP/1.1 WebSocket over TLS 1.3. Host must match the configured
+        public host. Query strings, Origin, Cookie and Authorization headers,
+        request bodies and compression are rejected/not negotiated.
+        After 101, send exactly one text frame containing the 47-byte gwt_ ticket
+        within three seconds. Do not put tickets in URLs or headers. The server
+        sends text 'ready' only after one-time redemption commits and Guest TCP
+        dial succeeds. Subsequent frames must be binary, at most 65536 bytes per
+        message, carrying the opaque end-to-end RDP stream. Authentication/dial
+        failure before ready closes the socket. Revocation, cancellation or lease
+        expiry closes transport immediately without waiting for a close handshake.
+        TLS certificate verification for the Guest remains the native client's
+        responsibility; the Gateway does not terminate the inner RDP TLS session.
+      parameters:
+        - in: header
+          name: Sec-WebSocket-Protocol
+          required: true
+          schema: { type: string, const: vc-workspace-rdp.v1 }
+      responses:
+        '101': { description: Transport upgraded; this is not yet authorization to use the desktop }
+        '400': { $ref: '#/components/responses/GatewayError' }
+        '503': { $ref: '#/components/responses/GatewayError' }
+  /internal/gateway/v1/ready:
+    servers:
+      - url: https://{controlHost}
+        variables:
+          controlHost: { default: 'gateway-control.example.invalid:8444' }
+    get:
+      operationId: getGatewayAuthorityReadiness
+      security: [{ gatewayMutualTLS: [] }]
+      responses:
+        '204': { description: Registered Gateway certificate accepted and PostgreSQL reachable }
+        '403': { $ref: '#/components/responses/GatewayError' }
+        '503': { $ref: '#/components/responses/GatewayError' }
+  /internal/gateway/v1/redeem:
+    servers:
+      - url: https://{controlHost}
+        variables:
+          controlHost: { default: 'gateway-control.example.invalid:8444' }
+    post:
+      operationId: redeemGatewayTicket
+      security: [{ gatewayMutualTLS: [] }]
+      description: >-
+        The Gateway identity is derived exclusively from the verified, enrolled
+        client leaf certificate. A valid CA signature alone is insufficient.
+        The single-use ticket is consumed before a grant is returned. Do not
+        retry an uncertain result. This endpoint cannot mint tickets or select
+        target addresses, ports, policy revisions, users or another Gateway ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [ticket]
+              properties:
+                ticket:
+                  type: string
+                  minLength: 47
+                  maxLength: 47
+                  pattern: '^gwt_[A-Za-z0-9_-]{43}$'
+                  writeOnly: true
+                  description: Canonical unpadded base64url random ticket, never logged
+      responses:
+        '200': { $ref: '#/components/responses/GatewayGrant' }
+        '400': { $ref: '#/components/responses/GatewayError' }
+        '403': { $ref: '#/components/responses/GatewayError' }
+        '503': { $ref: '#/components/responses/GatewayError' }
+  /internal/gateway/v1/renew:
+    servers:
+      - url: https://{controlHost}
+        variables:
+          controlHost: { default: 'gateway-control.example.invalid:8444' }
+    post:
+      operationId: renewGatewayGrant
+      security: [{ gatewayMutualTLS: [] }]
+      description: >-
+        Rechecks current device session, effective access, Guest binding,
+        identity profile, pending revocations and the original applied policy.
+        Closed/expired grants cannot resume. Identity, Guest certificate, target
+        and policy must remain unchanged. Every failed or timed-out renewal
+        requires the Gateway to close its data connection.
+      requestBody: { $ref: '#/components/requestBodies/GatewayTunnel' }
+      responses:
+        '200': { $ref: '#/components/responses/GatewayGrant' }
+        '400': { $ref: '#/components/responses/GatewayError' }
+        '403': { $ref: '#/components/responses/GatewayError' }
+        '503': { $ref: '#/components/responses/GatewayError' }
+  /internal/gateway/v1/close:
+    servers:
+      - url: https://{controlHost}
+        variables:
+          controlHost: { default: 'gateway-control.example.invalid:8444' }
+    post:
+      operationId: closeGatewayGrant
+      security: [{ gatewayMutualTLS: [] }]
+      description: >-
+        Idempotent closure scoped to the authenticated Gateway. Stops future
+        renewal and appends one closure audit. The Gateway closes network first;
+        this acknowledgement does not retire OS credentials or log off a Guest.
+      requestBody: { $ref: '#/components/requestBodies/GatewayTunnel' }
+      responses:
+        '204': { description: Closure acknowledged; does not reveal another Gateway's tunnel existence }
+        '400': { $ref: '#/components/responses/GatewayError' }
+        '403': { $ref: '#/components/responses/GatewayError' }
+        '503': { $ref: '#/components/responses/GatewayError' }
+components:
+  securitySchemes:
+    gatewayMutualTLS:
+      type: mutualTLS
+      description: >-
+        Direct TLS 1.3 with a client certificate validated by a dedicated CA and
+        enrolled by SHA-256 leaf fingerprint to exactly one Gateway ID. Certificate
+        expiry is rechecked on every request. Forwarded certificate/identity
+        headers, user Bearer tokens and the MCP internal token are not substitutes.
+  requestBodies:
+    GatewayTunnel:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [tunnel_id]
+            properties:
+              tunnel_id: { type: string, pattern: '^tun_[A-Za-z0-9_-]{24,128}$' }
+  responses:
+    GatewayError:
+      description: Rejected/unavailable, with a fixed non-sensitive message; no request/credential reflection
+      content:
+        text/plain:
+          schema: { type: string }
+    GatewayGrant:
+      description: Committed authority; all responses are Cache-Control no-store
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/GatewayGrant' }
+  schemas:
+    GatewayGrant:
+      type: object
+      additionalProperties: false
+      required: [connection_id, gateway_id, tunnel_id, target, certificate_sha256, policy_revision, valid_for_ms]
+      properties:
+        connection_id: { type: string, minLength: 1, maxLength: 140 }
+        gateway_id: { type: string, pattern: '^gw_[a-z0-9_-]{8,64}$' }
+        tunnel_id: { type: string, pattern: '^tun_[A-Za-z0-9_-]{24,128}$' }
+        target:
+          type: string
+          format: ipv4
+          description: Pinned RFC1918 literal address. Target port is always TCP 3389; no DNS or arbitrary proxy destination.
+        certificate_sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        policy_revision: { type: integer, minimum: 1 }
+        valid_for_ms:
+          type: integer
+          minimum: 1
+          maximum: 5000
+          description: >-
+            Conservative grant duration in milliseconds. Calculate the local
+            deadline from the monotonic instant before initiating the control
+            request, thereby subtracting HTTP/TLS/database latency. Never start
+            this duration when the response arrives, and never cache it as an
+            authorization for later tunnels.

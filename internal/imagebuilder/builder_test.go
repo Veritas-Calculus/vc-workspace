@@ -3,6 +3,7 @@ package imagebuilder
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -25,6 +26,10 @@ func TestCommandSpecKeepsSecretsOutOfArgumentsAndUsesConfiguredMirror(t *testing
 		"PKR_VAR_mirror_directory=/debian",
 		"PKR_VAR_mirror_url=http://mirror.example.com/debian",
 		"PKR_VAR_security_mirror_url=http://mirror.example.com/debian-security",
+		"PKR_VAR_pam_module=" + builder.config.LinuxPAMModule,
+		"PKR_VAR_native_pam_module=" + builder.config.LinuxNativePAMModule,
+		"PKR_VAR_xrdp_package=" + filepath.Join(builder.config.LinuxXRDPBundle, "xrdp.deb"),
+		"PKR_VAR_xrdp_package_sha256=" + builder.xrdpSHA256,
 		"PKR_VAR_cores=6",
 		"PKR_VAR_memory_mb=6144",
 		"PKR_VAR_disk_size=48G",
@@ -32,6 +37,56 @@ func TestCommandSpecKeepsSecretsOutOfArgumentsAndUsesConfiguredMirror(t *testing
 		if !strings.Contains(environment, expected) {
 			t.Fatalf("environment does not contain %q", expected)
 		}
+	}
+}
+
+func TestBuilderRequiresTheCompanionPAMModuleAndAllowsAnExplicitPath(t *testing.T) {
+	builder := testBuilder(t)
+	expected := filepath.Join(filepath.Dir(builder.config.LinuxAgentBinary), "pam_vcworkspace.so")
+	if builder.config.LinuxPAMModule != expected {
+		t.Fatal("default PAM artifact must accompany the Linux binary")
+	}
+	custom := filepath.Join(filepath.Dir(expected), "custom-pam.so")
+	if err := os.Rename(expected, custom); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(builder.config); err == nil {
+		t.Fatal("missing PAM module was accepted")
+	}
+	config := builder.config
+	config.LinuxPAMModule = custom
+	configured, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := configured.commandSpec(validDebianRequest())
+	if err != nil || !slices.Contains(spec.env, "PKR_VAR_pam_module="+custom) {
+		t.Fatal("explicit PAM module path not passed to Packer", err)
+	}
+}
+
+func TestBuilderRequiresSeparateNativePAMArtifactAndForwardsItsExplicitPath(t *testing.T) {
+	builder := testBuilder(t)
+	expected := filepath.Join(filepath.Dir(builder.config.LinuxAgentBinary), "pam_vcworkspace_native.so")
+	if builder.config.LinuxNativePAMModule != expected {
+		t.Fatal("Native PAM must accompany the Linux artifact")
+	}
+	custom := filepath.Join(filepath.Dir(expected), "custom-native-pam.so")
+	if err := os.Rename(expected, custom); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(builder.config); err == nil {
+		t.Fatal("missing Native PAM artifact was accepted")
+	}
+	config := builder.config
+	config.LinuxNativePAMModule = custom
+	configured, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := configured.commandSpec(validDebianRequest())
+	if err != nil || !slices.Contains(spec.env, "PKR_VAR_native_pam_module="+custom) {
+		t.Fatal("Native PAM artifact was not passed to the image build", err)
 	}
 }
 
@@ -88,8 +143,8 @@ func testBuilder(t *testing.T) *Builder {
 			t.Fatal(err)
 		}
 	}
-	artifacts := make([]string, 3)
-	for index, name := range []string{"linux-agent", "windows-agent.exe", "cloudbase.msi"} {
+	artifacts := make([]string, 5)
+	for index, name := range []string{"linux-agent", "windows-agent.exe", "cloudbase.msi", "pam_vcworkspace.so", "pam_vcworkspace_native.so"} {
 		artifacts[index] = filepath.Join(root, name)
 		if err := os.WriteFile(artifacts[index], []byte("fixture"), 0o644); err != nil {
 			t.Fatal(err)
@@ -99,6 +154,7 @@ func testBuilder(t *testing.T) *Builder {
 		Enabled: true, PackerPath: "/usr/bin/true", RootDir: root,
 		PVEEndpoint: "https://pve.example.com", PVETokenID: "builder@pve!packer", PVETokenSecret: "token-secret",
 		LinuxAgentBinary: artifacts[0], WindowsAgentBinary: artifacts[1], CloudbaseInitMSI: artifacts[2],
+		LinuxXRDPBundle: makeTestXRDPBundle(t, []byte("test Debian package")),
 	})
 	if err != nil {
 		t.Fatal(err)

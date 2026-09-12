@@ -6,6 +6,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/Veritas-Calculus/vc-workspace/internal/agentapi"
+	"github.com/Veritas-Calculus/vc-workspace/internal/computer"
 )
 
 func TestHTTPTransportAuthenticatesAgentAndListsTools(t *testing.T) {
@@ -25,6 +28,9 @@ func TestHTTPTransportAuthenticatesAgentAndListsTools(t *testing.T) {
 		request.Header.Set("Authorization", authorization)
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
+		if response.Result().Header.Get("Cache-Control") != "no-store, no-transform" {
+			t.Fatal("MCP authentication response must not be cached")
+		}
 		if response.Code != http.StatusUnauthorized {
 			t.Fatalf("expected 401 for authorization %q, got %d", authorization, response.Code)
 		}
@@ -36,11 +42,16 @@ func TestHTTPTransportAuthenticatesAgentAndListsTools(t *testing.T) {
 	request.Header.Set("Accept", "application/json, text/event-stream")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
+	if response.Result().Header.Get("Cache-Control") != "no-store, no-transform" {
+		t.Fatal("authenticated MCP response must not be cached")
+	}
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected authenticated MCP request to succeed, got %d: %s", response.Code, response.Body.String())
 	}
 	body := response.Body.String()
-	if !strings.Contains(body, `"desktop_list"`) || !strings.Contains(body, `"desktop_release"`) {
+	if !strings.Contains(body, `"desktop_list"`) || !strings.Contains(body, `"desktop_release"`) ||
+		!strings.Contains(body, `"desktop_screenshot"`) || !strings.Contains(body, `"desktop_accessibility_snapshot"`) ||
+		!strings.Contains(body, `"desktop_mouse"`) || !strings.Contains(body, `"desktop_key"`) || !strings.Contains(body, `"desktop_type_text"`) {
 		t.Fatalf("expected tool catalogue, got %s", body)
 	}
 	if strings.Contains(body, `"inputSchema":{"type":"object","properties":{"agent_id"`) {
@@ -66,6 +77,81 @@ func TestHTTPTransportRejectsBrowserOrigins(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("expected 403 for browser Origin, got %d", response.Code)
+	}
+}
+
+func TestComputerToolBindsAuthenticatedAgentAndControlEpoch(t *testing.T) {
+	var gotAction agentapi.ComputerAction
+	controlPlane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/agent/authenticate":
+			if r.Header.Get("Authorization") != "Bearer internal-token" || r.Header.Get("X-VC-Workspace-Agent-Token") != "agent-token" {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"agent-one","display_name":"Agent One","enabled":true}`))
+		case "/api/v1/agent/desktop-leases/lease_abcdefghijklmnopqrstuvwxyz/computer-actions":
+			if r.Header.Get("Authorization") != "Bearer internal-token" || r.URL.Query().Get("agent_id") != "agent-one" {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			if err := json.NewDecoder(r.Body).Decode(&gotAction); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(computer.Response{
+				SchemaVersion: computer.SchemaVersion,
+				RequestID:     "action_test",
+				OK:            true,
+				Input:         &computer.InputResult{Applied: true},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer controlPlane.Close()
+
+	server, err := newMCPServer(controlPlane.URL, "internal-token", contextAgentIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := newHTTPHandler(controlPlane.URL, "internal-token", server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{
+		"jsonrpc":"2.0",
+		"id":2,
+		"method":"tools/call",
+		"params":{
+			"name":"desktop_type_text",
+			"arguments":{
+				"lease_id":"lease_abcdefghijklmnopqrstuvwxyz",
+				"control_epoch":7,
+				"text":"private task input",
+				"sensitive":true,
+				"timeout_ms":2000
+			}
+		}
+	}`))
+	request.Header.Set("Authorization", "Bearer agent-token")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected authenticated computer tool call to succeed, got %d: %s", response.Code, response.Body.String())
+	}
+	if gotAction.ControlEpoch != 7 || gotAction.Operation != computer.OperationTypeText || gotAction.TimeoutMS != 2000 || gotAction.Text == nil {
+		t.Fatalf("unexpected forwarded action: %#v", gotAction)
+	}
+	if gotAction.Text.Value != "private task input" || !gotAction.Text.Sensitive {
+		t.Fatalf("typed text policy was not forwarded: %#v", gotAction.Text)
+	}
+	if !strings.Contains(response.Body.String(), `"applied":true`) {
+		t.Fatalf("expected computer action result, got %s", response.Body.String())
 	}
 }
 

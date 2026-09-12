@@ -1,0 +1,46 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: session-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: vc-workspace-session-gateway
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+      ports: [{protocol: TCP, port: 8443}]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: vc-workspace-control-plane
+      ports: [{protocol: TCP, port: 8444}]
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+    # Guest /32 egress is generated from the explicitly selected test VM, not a LAN-wide rule.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-control
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: vc-workspace-control-plane
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: vc-workspace-session-gateway
+      ports: [{protocol: TCP, port: 8444}]

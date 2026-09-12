@@ -1,5 +1,5 @@
 {
-  "name": "vc-vdi",
+  "name": "vc-workspace",
   "private": true,
   "repository": {
     "type": "git",
@@ -9,9 +9,9 @@
   "bugs": "https://github.com/Veritas-Calculus/vc-workspace/issues",
   "packageManager": "pnpm@10.33.0",
   "scripts": {
-    "dev": "pnpm --parallel --filter @vc-vdi/web dev",
-    "build": "pnpm --filter @vc-vdi/web build",
-    "check": "pnpm --filter @vc-vdi/web check",
-    "test": "pnpm --filter @vc-vdi/web test"
+    "dev": "pnpm --parallel --filter @vc-workspace/web dev",
+    "build": "pnpm --filter @vc-workspace/web build",
+    "check": "pnpm --filter @vc-workspace/web check",
+    "test": "pnpm --filter @vc-workspace/web test"
   }
 }

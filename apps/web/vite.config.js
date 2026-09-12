@@ -1,13 +1,13 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 export default defineConfig(({ mode }) => {
-    const env = loadEnv(mode, '.', 'VC_VDI_');
+    const env = loadEnv(mode, '.', '');
     return {
         plugins: [react()],
         server: {
             port: 5173,
             proxy: {
-                '/api': env.VC_VDI_WEB_API_URL || 'http://127.0.0.1:8080',
+                '/api': env.VC_WORKSPACE_WEB_API_URL || env.VC_VDI_WEB_API_URL || 'http://127.0.0.1:8080',
             },
         },
     };

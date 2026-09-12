@@ -3,17 +3,17 @@ set -euo pipefail
 
 backup_dir="${1:-}"
 apply="${2:-}"
-etc_root="${VC_VDI_ETC_ROOT:-/etc}"
-backup_root="${VC_VDI_BACKUP_ROOT:-/root}"
+etc_root="${VC_WORKSPACE_ETC_ROOT:-/etc}"
+backup_root="${VC_WORKSPACE_BACKUP_ROOT:-/root}"
 if [[ -z "$backup_dir" || ( "$apply" != "" && "$apply" != "--apply" ) ]]; then
-  printf 'usage: %s /root/vc-vdi-gpu-backup-TIMESTAMP [--apply]\n' "$0" >&2
+  printf 'usage: %s /root/vc-workspace-gpu-backup-TIMESTAMP [--apply]\n' "$0" >&2
   exit 2
 fi
 if [[ ! -f "$backup_dir/manifest" || ! -f "$backup_dir/created-files" ]]; then
   printf 'status=blocked\nreason=invalid_backup_directory\n'
   exit 1
 fi
-if [[ "$backup_dir" != "$backup_root"/vc-vdi-gpu-backup-* ]]; then
+if [[ "$backup_dir" != "$backup_root"/vc-workspace-gpu-backup-* ]]; then
   printf 'status=blocked\nreason=backup_directory_outside_allowed_root\n'
   exit 1
 fi
@@ -28,10 +28,10 @@ grub_fragment="$(manifest_value grub_fragment)"
 kernel_cmdline="$(manifest_value kernel_cmdline)"
 vfio_config="$(manifest_value vfio_config)"
 modules_config="$(manifest_value modules_config)"
-expected_grub_fragment="$etc_root/default/grub.d/99-vc-vdi-iommu.cfg"
+expected_grub_fragment="$etc_root/default/grub.d/99-vc-workspace-iommu.cfg"
 expected_kernel_cmdline="$etc_root/kernel/cmdline"
-expected_vfio_config="$etc_root/modprobe.d/vc-vdi-vfio.conf"
-expected_modules_config="$etc_root/modules-load.d/vc-vdi-vfio.conf"
+expected_vfio_config="$etc_root/modprobe.d/vc-workspace-vfio.conf"
+expected_modules_config="$etc_root/modules-load.d/vc-workspace-vfio.conf"
 if [[ "$grub_fragment" != "$expected_grub_fragment" || \
       "$kernel_cmdline" != "$expected_kernel_cmdline" || \
       "$vfio_config" != "$expected_vfio_config" || \

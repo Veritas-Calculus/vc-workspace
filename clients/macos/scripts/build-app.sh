@@ -24,13 +24,13 @@ contents_dir="${app_dir}/Contents"
 
 rm -rf "${app_dir}" "${legacy_app_dir}"
 mkdir -p "${contents_dir}/MacOS" "${contents_dir}/Resources" "${contents_dir}/Frameworks"
-cp "${binary_dir}/VCVDI" "${contents_dir}/MacOS/VCVDI"
+cp "${binary_dir}/VCWorkspace" "${contents_dir}/MacOS/VCWorkspace"
 cp "${client_dir}/App/Info.plist" "${contents_dir}/Info.plist"
 cp "${client_dir}/App/VCWorkspace.icns" "${contents_dir}/Resources/VCWorkspace.icns"
-chmod 0755 "${contents_dir}/MacOS/VCVDI"
+chmod 0755 "${contents_dir}/MacOS/VCWorkspace"
 "${script_dir}/build-native-rdp.sh" "${contents_dir}"
 
-signing_identity="${VC_VDI_CODESIGN_IDENTITY:-}"
+signing_identity="${VC_WORKSPACE_CODESIGN_IDENTITY:-${VC_VDI_CODESIGN_IDENTITY:-}}"
 if [[ -z "${signing_identity}" ]] && command -v security >/dev/null 2>&1; then
   signing_identity="$(security find-identity -p codesigning -v 2>/dev/null | awk '/Apple Development/ { print $2; exit }')"
 fi

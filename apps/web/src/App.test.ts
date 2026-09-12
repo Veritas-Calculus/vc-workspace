@@ -18,11 +18,11 @@ const platform = {
     { id: 'none', mode: 'none', enabled: true },
     {
       id: 'intel-igpu-passthrough', mode: 'pci_passthrough', enabled: true,
-      vendor_id: '0x8086', device_class: '0x030000', resource_mapping: 'vc-vdi-intel-igpu', mdev_type: '',
+      vendor_id: '0x8086', device_class: '0x030000', resource_mapping: 'vc-workspace-intel-igpu', mdev_type: '',
     },
     {
       id: 'intel-gvtg-v5-4', mode: 'mdev', enabled: true,
-      vendor_id: '0x8086', device_class: '0x030000', resource_mapping: 'vc-vdi-intel-gvtg', mdev_type: 'i915-GVTg_V5_4',
+      vendor_id: '0x8086', device_class: '0x030000', resource_mapping: 'vc-workspace-intel-gvtg', mdev_type: 'i915-GVTg_V5_4',
     },
   ],
   gpu_devices: [
@@ -30,15 +30,15 @@ const platform = {
     { node: 'infra-node4', id: '0000:00:02.0', vendor_id: '0x8086', class: '0x030000', assignable: true, mdev_types: [{ type: 'i915-GVTg_V5_4', name: 'GVTg_V5_4', available: 0, description: '' }] },
   ],
   pci_resource_mappings: [
-    { id: 'vc-vdi-intel-igpu', description: '', mdev: false, entries: [{ node: 'infra-node4', device_id: '0000:00:02.0', iommu_group: '7' }] },
-    { id: 'vc-vdi-intel-gvtg', description: '', mdev: true, entries: [{ node: 'infra-node3', device_id: '0000:00:02.0' }, { node: 'infra-node4', device_id: '0000:00:02.0' }] },
+    { id: 'vc-workspace-intel-igpu', description: '', mdev: false, entries: [{ node: 'infra-node4', device_id: '0000:00:02.0', iommu_group: '7' }] },
+    { id: 'vc-workspace-intel-gvtg', description: '', mdev: true, entries: [{ node: 'infra-node3', device_id: '0000:00:02.0' }, { node: 'infra-node4', device_id: '0000:00:02.0' }] },
   ],
 } as PlatformConfig
 
 const desktopInfrastructure = {
   virtual_machines: [
-    { vmid: 158, name: 'vc-vdi-debian', node: 'infra-node6', status: 'running', template: false, managed: true },
-    { vmid: 159, name: 'vc-vdi-windows', node: 'infra-node4', status: 'stopped', template: false, managed: true },
+    { vmid: 158, name: 'vc-workspace-debian', node: 'infra-node6', status: 'running', template: false, managed: true },
+    { vmid: 159, name: 'vc-workspace-windows', node: 'infra-node4', status: 'stopped', template: false, managed: true },
     { vmid: 9100, name: 'debian-template', node: 'infra-node3', status: 'stopped', template: true, managed: false },
     { vmid: 101, name: 'database', node: 'infra-node3', status: 'running', template: false, managed: false },
   ],
@@ -75,7 +75,7 @@ describe('public routes', () => {
 
 describe('native app links', () => {
   it('carries only the desktop identifier', () => {
-    expect(desktopAppLink(158)).toBe('vc-vdi://connect?vmid=158')
+    expect(desktopAppLink(158)).toBe('vc-workspace://connect?vmid=158')
     expect(desktopAppLink(158)).not.toMatch(/token|password|host/i)
   })
 
@@ -103,7 +103,7 @@ describe('eligibleNodesForGPU', () => {
     const wholeDevice = {
       ...platform,
       pci_resource_mappings: [{
-        id: 'vc-vdi-intel-igpu', description: '', mdev: false,
+        id: 'vc-workspace-intel-igpu', description: '', mdev: false,
         entries: [{ node: 'infra-node4', device_id: '0000:00:02', device_paths: ['0000:00:02'], hardware_id: '8086:1912', iommu_group: '7' }],
       }],
     }

@@ -1,0 +1,80 @@
+# This stack is intentionally local and disposable. It is not a production
+# Keycloak, PostgreSQL, or OpenLDAP deployment.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: vc_workspace_identity_lab
+      POSTGRES_USER: vc_workspace
+      POSTGRES_PASSWORD: ${VC_WORKSPACE_LAB_POSTGRES_PASSWORD:?set by check.sh}
+    ports:
+      - "127.0.0.1:55436:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vc_workspace -d vc_workspace_identity_lab"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.3
+    command:
+      - start-dev
+      - --import-realm
+      - --hostname=http://127.0.0.1:18080
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: vc-workspace-lab-admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${VC_WORKSPACE_LAB_OIDC_ADMIN_PASSWORD:?set by check.sh}
+      VC_WORKSPACE_LAB_OIDC_CLIENT_SECRET: ${VC_WORKSPACE_LAB_OIDC_CLIENT_SECRET:?set by check.sh}
+      VC_WORKSPACE_LAB_OIDC_USER_PASSWORD: ${VC_WORKSPACE_LAB_OIDC_USER_PASSWORD:?set by check.sh}
+    ports:
+      - "127.0.0.1:18080:8080"
+    volumes:
+      - ./keycloak/vc-workspace-lab-realm.json:/opt/keycloak/data/import/vc-workspace-lab-realm.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 1g
+
+  ldap:
+    image: vc-workspace-identity-lab-openldap:local
+    build:
+      context: ./openldap
+      args:
+        DEBIAN_MIRROR: ${VC_WORKSPACE_LAB_DEBIAN_MIRROR:-http://deb.debian.org/debian}
+        DEBIAN_SECURITY_MIRROR: ${VC_WORKSPACE_LAB_DEBIAN_SECURITY_MIRROR:-http://deb.debian.org/debian-security}
+    environment:
+      LDAP_ADMIN_PASSWORD: ${VC_WORKSPACE_LAB_LDAP_ADMIN_PASSWORD:?set by check.sh}
+      LDAP_ALICE_PASSWORD: ${VC_WORKSPACE_LAB_LDAP_ALICE_PASSWORD:?set by check.sh}
+      LDAP_BOB_PASSWORD: ${VC_WORKSPACE_LAB_LDAP_BOB_PASSWORD:?set by check.sh}
+    volumes:
+      - ldap-ca:/shared
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - LDAPTLS_CACERT=/shared/ca.crt ldapsearch -ZZ -x -H ldap://127.0.0.1:389 -b dc=lab,dc=vc-workspace,dc=test -s base dn >/dev/null
+      interval: 2s
+      timeout: 4s
+      retries: 30
+
+  sssd-client:
+    image: vc-workspace-identity-lab-sssd-client:local
+    build:
+      context: ./sssd-client
+      args:
+        DEBIAN_MIRROR: ${VC_WORKSPACE_LAB_DEBIAN_MIRROR:-http://deb.debian.org/debian}
+        DEBIAN_SECURITY_MIRROR: ${VC_WORKSPACE_LAB_DEBIAN_SECURITY_MIRROR:-http://deb.debian.org/debian-security}
+    privileged: true
+    environment:
+      container: docker
+    tmpfs:
+      - /run
+      - /run/lock
+    volumes:
+      - ldap-ca:/shared:ro
+    depends_on:
+      ldap:
+        condition: service_healthy
+    stop_signal: SIGRTMIN+3
+
+volumes:
+  ldap-ca:

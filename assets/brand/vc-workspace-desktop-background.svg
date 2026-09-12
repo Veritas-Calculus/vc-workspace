@@ -1,0 +1,17 @@
+<svg viewBox="0 0 3840 2160" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title description">
+  <title id="title">VC Workspace managed desktop background</title>
+  <desc id="description">A restrained warm-black background with the Agent Fabric mark and VC Workspace name in the lower-right area.</desc>
+  <rect width="3840" height="2160" fill="#1c1c1a"/>
+  <g transform="translate(-320 -170)">
+    <g fill="none" stroke="#f0efe9" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" opacity="0.22">
+      <path d="M2980 1428 3100 1370l120 58v139l-120 63-120-63z"/>
+      <path d="M3100 1630v111M2980 1567l-101 136M3220 1567l112 123"/>
+    </g>
+    <g fill="#f0efe9" opacity="0.22">
+      <circle cx="3100" cy="1783" r="42"/>
+      <circle cx="2849" cy="1742" r="42"/>
+      <circle cx="3365" cy="1724" r="42"/>
+    </g>
+    <text x="2820" y="1925" fill="#f0efe9" opacity="0.66" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="74" font-weight="600" letter-spacing="-1">VC Workspace</text>
+  </g>
+</svg>

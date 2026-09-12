@@ -1,0 +1,15 @@
+--- a/libfreerdp/core/freerdp.c
++++ b/libfreerdp/core/freerdp.c
+@@ -465,6 +465,12 @@
+ 			WLog_Print(context->log, WLOG_ERROR, "freerdp_check_fds() failed - %" PRIi32 "",
+ 			           status);
+ 
++		/* A decoder/update callback can fail without assigning LastError.
++		 * Preserve cancellation and specific errors, but never report this
++		 * unexpected receive failure as a successful disconnect. */
++		if (!freerdp_shall_disconnect_context(context))
++			freerdp_set_last_error_if_not(context, FREERDP_ERROR_CONNECT_UNDEFINED);
++
+ 		return FALSE;
+ 	}
+ 

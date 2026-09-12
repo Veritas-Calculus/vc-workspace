@@ -1,0 +1,11 @@
+[Unit]
+Description=VC Workspace offline account expiry schedule
+
+[Timer]
+OnBootSec=5s
+OnUnitInactiveSec=10s
+AccuracySec=1s
+Unit=vc-workspace-accounts.service
+
+[Install]
+WantedBy=timers.target

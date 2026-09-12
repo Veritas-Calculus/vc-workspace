@@ -7,11 +7,11 @@
     <key>CFBundleDisplayName</key>
     <string>VC Workspace</string>
     <key>CFBundleExecutable</key>
-    <string>VCVDI</string>
+    <string>VCWorkspace</string>
     <key>CFBundleIconFile</key>
     <string>VCWorkspace</string>
     <key>CFBundleIdentifier</key>
-    <string>ac.plz.vc-vdi</string>
+    <string>ac.plz.vc-workspace</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
@@ -31,6 +31,7 @@
             <string>VC Workspace links</string>
             <key>CFBundleURLSchemes</key>
             <array>
+                <string>vc-workspace</string>
                 <string>vc-vdi</string>
             </array>
         </dict>

@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vc-workspace-control-plane
+spec:
+  template:
+    spec:
+      securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      containers:
+        - name: control-plane
+          env:
+            - {name: VC_WORKSPACE_GATEWAY_CONTROL_ADDR, value: '0.0.0.0:8444'}
+            - {name: VC_WORKSPACE_GATEWAY_CONTROL_TLS_CERT_FILE, value: /tls/control/tls.crt}
+            - {name: VC_WORKSPACE_GATEWAY_CONTROL_TLS_KEY_FILE, value: /tls/control/tls.key}
+            - {name: VC_WORKSPACE_GATEWAY_CONTROL_CLIENT_CA_FILE, value: /tls/control/ca.crt}
+            - {name: VC_WORKSPACE_GATEWAY_CONTROL_PEERS_FILE, value: /tls/peers/peers.json}
+            - {name: VC_WORKSPACE_NATIVE_GATEWAY_ID, value: gw_infra_gateway}
+            - {name: VC_WORKSPACE_NATIVE_GATEWAY_URL, value: 'https://ws.infra.plz.ac'}
+            - name: VC_WORKSPACE_NATIVE_GATEWAY_ALLOWED_TARGETS
+              valueFrom:
+                configMapKeyRef: {name: vc-workspace-targets, key: allowed-targets}
+          ports:
+            - {name: control-tls, containerPort: 8444}
+          volumeMounts:
+            - {name: control-tls, mountPath: /tls/control, readOnly: true}
+            - {name: gateway-peers, mountPath: /tls/peers, readOnly: true}
+      volumes:
+        - name: control-tls
+          secret: {secretName: vc-workspace-control-tls, defaultMode: 0440}
+        - name: gateway-peers
+          configMap: {name: vc-workspace-gateway-peers}

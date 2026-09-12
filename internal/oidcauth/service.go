@@ -2,7 +2,9 @@ package oidcauth
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
@@ -16,6 +18,7 @@ type Config struct {
 	ClientID     string
 	ClientSecret string
 	RedirectURL  string
+	GroupsClaim  string
 }
 
 type Service struct {
@@ -25,10 +28,11 @@ type Service struct {
 }
 
 type Claims struct {
-	Subject string `json:"sub"`
-	Name    string `json:"name"`
-	Email   string `json:"email"`
-	Nonce   string `json:"nonce"`
+	Subject string   `json:"sub"`
+	Name    string   `json:"name"`
+	Email   string   `json:"email"`
+	Nonce   string   `json:"nonce"`
+	Groups  []string `json:"groups,omitempty"`
 }
 
 func New(ctx context.Context, config Config) (*Service, error) {
@@ -84,5 +88,49 @@ func (s *Service) Exchange(ctx context.Context, code, pkceVerifier, expectedNonc
 	if claims.Nonce != expectedNonce {
 		return Claims{}, fmt.Errorf("ID token nonce does not match")
 	}
+	groupsClaim := strings.TrimSpace(s.config.GroupsClaim)
+	if groupsClaim == "" {
+		groupsClaim = "groups"
+	}
+	if groupsClaim != "groups" {
+		var rawClaims map[string]json.RawMessage
+		if err := idToken.Claims(&rawClaims); err != nil {
+			return Claims{}, fmt.Errorf("decode ID token group claims: %w", err)
+		}
+		if raw, ok := rawClaims[groupsClaim]; ok {
+			if err := json.Unmarshal(raw, &claims.Groups); err != nil {
+				return Claims{}, fmt.Errorf("OIDC group claim %q must be an array of strings", groupsClaim)
+			}
+		} else {
+			claims.Groups = nil
+		}
+	}
+	claims.Groups, err = normalizeGroups(claims.Groups)
+	if err != nil {
+		return Claims{}, err
+	}
 	return claims, nil
+}
+
+func normalizeGroups(groups []string) ([]string, error) {
+	if len(groups) > 256 {
+		return nil, fmt.Errorf("OIDC group claim contains more than 256 values")
+	}
+	result := make([]string, 0, len(groups))
+	seen := make(map[string]struct{}, len(groups))
+	for _, group := range groups {
+		group = strings.TrimSpace(group)
+		if group == "" {
+			continue
+		}
+		if len([]rune(group)) > 512 {
+			return nil, fmt.Errorf("OIDC group claim value exceeds 512 characters")
+		}
+		if _, ok := seen[group]; ok {
+			continue
+		}
+		seen[group] = struct{}{}
+		result = append(result, group)
+	}
+	return result, nil
 }

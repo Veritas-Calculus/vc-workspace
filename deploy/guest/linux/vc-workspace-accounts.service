@@ -1,0 +1,37 @@
+[Unit]
+Description=VC Workspace bounded local account expiry
+After=local-fs.target
+# Retrying a failed sweep must not permanently exhaust the service start limit.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/sbin/vc-workspace-guest-agent computer-v2-accounts-reconcile
+TimeoutStartSec=45
+TimeoutStopSec=5
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=true
+# Closure also removes this disabled UID's stale Xorg nodes from shared /tmp.
+# The implementation pins sticky root directories and rejects foreign nodes.
+PrivateTmp=false
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_KILL
+# shadow-utils atomically replaces files and creates adjacent locks/backups.
+# A writable bind of /etc/shadow alone cannot support that rename protocol.
+# Only this fixed offline worker gets /etc; the readiness service does not.
+# logind owns scope creation/removal. The worker writes only a verified pinned
+# scope's cgroup.kill; the nested exception does not expose the rest of cgroupfs.
+ReadWritePaths=/var/lib/vc-workspace/computer-v2 /etc /sys/fs/cgroup/user.slice /tmp
+ReadOnlyPaths=/etc/systemd /etc/ssh /etc/pam.d /etc/sudoers /etc/sudoers.d /etc/vc-workspace

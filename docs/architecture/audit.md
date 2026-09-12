@@ -2,9 +2,11 @@
 
 ## 当前模型
 
-控制面把身份验证、用户/Agent 状态、桌面分配、桌面生命周期、镜像/GPU 配置、Guest 权限策略、原生连接和 AI Agent Lease 写入 PostgreSQL `audit_events`。事件为追加写入，HTTP API 不提供修改或删除入口。
+控制面把身份验证、用户/Agent 状态、桌面分配、桌面生命周期、镜像/GPU 配置、Guest 权限与会话策略、原生连接和 AI Agent Lease 写入 PostgreSQL `audit_events`。事件为追加写入，HTTP API 不提供修改或删除入口。
 
-每条记录包含：不可变 ID、发生时间、事件类型、成功/失败结果、操作者 ID 与当前显示名、目标类型与 ID，以及结构化详情。后台任务以创建者作为操作者；没有本地用户身份的 MCP 服务事件显示为“系统”，详情保留 `agent_id`。
+Guest 撤权执行完成使用 `guest_identity.revoked` 系统事件，与撤销队列的 revision 确认同事务提交。事件包含 VM、受影响用户、原因与 revision，不保存命令或凭据；执行主体为空表示后台系统，不冒充被撤权用户。原始撤分配、改密或注销操作仍由各自请求事件记录操作者。QGA 失败不写虚假的成功完成事件，重试已确认 revision 不重复记录。
+
+每条记录包含：不可变 ID、发生时间、事件类型、成功/失败结果、操作者 ID 与当前显示名、目标类型与 ID，以及结构化详情。后台任务以创建者作为操作者；MCP 事件将 Agent principal 解析为操作者并显示 Agent 名称，确实没有用户或 Agent 身份的系统事件才显示为“系统”。
 
 管理员通过 `GET /api/v1/audit-events` 查询。接口按 ID 倒序使用游标分页，支持成功/失败筛选，并可搜索事件类型、操作者和目标；普通用户返回 403。Web 只展示可扫描的时间、操作者、事件、目标和结果，低频字段按行展开，不增加装饰性统计卡。
 
@@ -13,7 +15,9 @@
 - `setup` 与 `auth`：初始化、Web/OIDC/macOS 登录和退出，以及未知、停用或密码不可用账号的失败尝试。
 - `desktop`、`desktop_assignment`、`desktop_registry`、`virtual_machine` 与 `native`：桌面同步、分配、访问拒绝、创建、启停、原生连接和 Guest 权限策略的保存与应用结果。
 - `image_profile`、`image_build`、`gpu_profile` 与 `pci_resource_mapping`：管理员对模板、镜像构建和 GPU 资源的变更。
-- `user` 与 `agent`：用户/Agent 创建、停用、凭证轮换、未授权访问，以及 AI Agent 桌面租约的创建与释放。
+- `user` 与 `agent`：用户/Agent 创建、停用、凭证轮换、未授权访问，以及 AI Agent 桌面租约的创建、释放与人工接管吊销。
+- `agent.computer_action_*`：记录 Agent 身份、Lease、操作类型、结果、超时/拒绝原因，以及截图尺寸/摘要、可访问性节点数量或键鼠动作元数据；Lease 已过期、已被人工接管或不属于调用 Agent 时也保留脱敏拒绝事件。文本只记录 UTF-8 字节数和敏感标记，文本内容、截图字节和凭证不进入审计详情。
+- `agent.computer_authority_revoked`：Guest tombstone 同步成功后，与队列 revision 确认原子提交的系统事件。它区别于 Broker 的租约释放/吊销请求，记录 VM 与完成 revision；QGA 失败不记录虚假完成，重复确认不重复产生事件。
 - `job` 与 `audit`：异步 PVE 任务的最终结果，以及普通用户读取审计日志被拒绝的尝试。
 
 `outcome` 在写入时固化，不在查询时根据展示文案临时推断；历史数据迁移按事件名的 `failed`、`rejected`、`denied` 后缀回填失败结果。查询索引覆盖操作者、事件类型、结果和倒序 ID，MVP 不执行无界列表查询。
@@ -24,7 +28,7 @@
 - 请求事件记录 TCP 对端地址与截断后的 User-Agent。控制面不直接信任 `X-Forwarded-For`；部署在反向代理后时，当前值是代理地址，后续只能通过显式可信代理配置恢复客户端地址。
 - 登录失败使用统一对外错误，但审计内区分未知用户、停用用户、未启用密码登录和密码错误。密码、OIDC code/state、Session、CSRF、RDP 密码与 PVE 凭证不得进入审计。
 - 未知账号无法关联操作者 ID，但尝试的规范化用户名会作为目标保留，因此管理员仍可直接搜索；审计查询权限同时由 UI 隐藏和服务端 403 双重执行，拒绝读取本身也写入审计。
-- Guest 权限更新分别记录“策略已保存”和“应用成功/失败”；PVE 异步任务在状态从 running 首次收敛时追加成功或失败事件，条件更新防止重复完成事件。
+- Guest 权限与会话策略更新分别记录“策略已保存”和“应用成功/失败”。保存事件包含权限模式、剪贴板/驱动器/背景开关和目标 revision；应用事件包含已应用 revision 与策略摘要，失败事件只保存有界错误而不保存 Guest 命令或凭据。PVE 异步任务在状态从 running 首次收敛时追加成功或失败事件，条件更新防止重复完成事件。
 
 ## 后续生产加固
 

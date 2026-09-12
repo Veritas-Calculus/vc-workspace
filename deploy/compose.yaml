@@ -1,21 +1,21 @@
-name: vc-vdi
+name: vc-workspace
 
 services:
   postgres:
     image: postgres:17-alpine
     environment:
-      POSTGRES_DB: vc_vdi
-      POSTGRES_USER: vc_vdi
-      POSTGRES_PASSWORD: vc_vdi
+      POSTGRES_DB: vc_workspace
+      POSTGRES_USER: vc_workspace
+      POSTGRES_PASSWORD: vc_workspace
     ports:
       - "127.0.0.1:55434:5432"
     volumes:
-      - vc-vdi-postgres:/var/lib/postgresql/data
+      - vc-workspace-postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U vc_vdi -d vc_vdi"]
+      test: ["CMD-SHELL", "pg_isready -U vc_workspace -d vc_workspace"]
       interval: 3s
       timeout: 3s
       retries: 20
 
 volumes:
-  vc-vdi-postgres:
+  vc-workspace-postgres:

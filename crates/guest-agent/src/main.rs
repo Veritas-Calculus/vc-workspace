@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod computer;
+
 use serde::Serialize;
 use std::{
     env, fs,
@@ -19,6 +21,7 @@ struct Config {
     address: SocketAddr,
     interval: Duration,
     once: bool,
+    readiness_only: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -42,25 +45,50 @@ struct DesktopState {
 }
 
 fn main() -> ExitCode {
-    let config = match parse_args(env::args().skip(1)) {
+    let arguments: Vec<String> = env::args().skip(1).collect();
+    if let Some(result) = computer::run_cli(&arguments) {
+        return result;
+    }
+    let config = match parse_args(arguments) {
         Ok(ParseResult::Run(config)) => config,
         Ok(ParseResult::Help) => {
             print_help();
             return ExitCode::SUCCESS;
         }
         Ok(ParseResult::Version) => {
-            println!("vc-vdi-guest-agent {VERSION}");
+            println!("vc-workspace-guest-agent {VERSION}");
             return ExitCode::SUCCESS;
         }
         Err(message) => {
-            eprintln!("vc-vdi-guest-agent: {message}");
+            eprintln!("vc-workspace-guest-agent: {message}");
             return ExitCode::from(2);
         }
     };
 
     loop {
+        #[cfg(target_os = "linux")]
+        if let Err(error) = if config.readiness_only {
+            Ok(())
+        } else {
+            computer::reconcile_accounts()
+        } {
+            eprintln!("vc-workspace-guest-agent: managed account expiry check failed: {error}");
+            if config.once {
+                return ExitCode::FAILURE;
+            }
+        }
+        #[cfg(target_os = "windows")]
+        if let Err(error) = vc_workspace_windows_session::reconcile_accounts() {
+            // Existing SYSTEM startup task supervises local expiry even while
+            // PVE/control-plane connectivity is unavailable. No user names,
+            // credentials or desktop content are logged here.
+            eprintln!("vc-workspace-guest-agent: managed account expiry check failed: {error}");
+            if config.once {
+                return ExitCode::FAILURE;
+            }
+        }
         if let Err(error) = update_state(&config, unix_time()) {
-            eprintln!("vc-vdi-guest-agent: {error}");
+            eprintln!("vc-workspace-guest-agent: {error}");
             if config.once {
                 return ExitCode::FAILURE;
             }
@@ -86,6 +114,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParseResult, Str
             .expect("constant socket address is valid"),
         interval: Duration::from_secs(15),
         once: false,
+        readiness_only: false,
     };
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -112,6 +141,8 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParseResult, Str
                 config.interval = Duration::from_secs(seconds);
             }
             "--once" => config.once = true,
+            #[cfg(target_os = "linux")]
+            "--readiness-only" => config.readiness_only = true,
             "--help" | "-h" => return Ok(ParseResult::Help),
             "--version" | "-V" => return Ok(ParseResult::Version),
             _ => return Err(format!("unknown argument {arg}")),
@@ -123,11 +154,16 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParseResult, Str
 fn print_help() {
     println!(
         "VC Workspace guest readiness agent\n\n\
-Usage: vc-vdi-guest-agent [OPTIONS]\n\n\
+Usage: vc-workspace-guest-agent [OPTIONS]\n\n\
+Commands:\n  computer-helper             Run inside the interactive vdi user session\n  \
+computer-dispatch           Publish, wait for, return, and clean one request\n  \
+computer-wait               Wait for one bounded helper response (SYSTEM/root only)\n  \
+computer-cleanup            Remove one completed request and response\n\n\
 Options:\n  --state-dir PATH          State directory\n  \
 --rdp-address IP:PORT      Local RDP endpoint [default: 127.0.0.1:3389]\n  \
 --interval-seconds N       Heartbeat interval, 5-300 [default: 15]\n  \
 --once                     Write state once and exit\n  \
+--readiness-only           Linux: delegate account expiry to the dedicated service\n  \
 -h, --help                 Print help\n  \
 -V, --version              Print version"
     );
@@ -168,14 +204,41 @@ fn write_state(config: &Config, heartbeat_unix: u64, ready: bool) -> io::Result<
 }
 
 fn atomic_write(path: &Path, payload: &[u8]) -> io::Result<()> {
-    let temporary = path.with_extension("tmp");
+    let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
     let mut file = fs::File::create(&temporary)?;
     file.write_all(payload)?;
+    #[cfg(not(target_os = "windows"))]
     file.sync_all()?;
-    if path.exists() {
-        fs::remove_file(path)?;
+    #[cfg(target_os = "windows")]
+    file.flush()?;
+    drop(file);
+    #[cfg(not(target_os = "windows"))]
+    {
+        fs::rename(temporary, path)
     }
-    fs::rename(temporary, path)
+    #[cfg(target_os = "windows")]
+    {
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if path.exists() {
+                match fs::remove_file(path) {
+                    Ok(()) => {}
+                    Err(_) if std::time::Instant::now() < deadline => {
+                        thread::sleep(Duration::from_millis(20));
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            match fs::rename(&temporary, path) {
+                Ok(()) => return Ok(()),
+                Err(_) if std::time::Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
 }
 
 fn default_state_dir() -> PathBuf {
@@ -186,7 +249,7 @@ fn default_state_dir() -> PathBuf {
             .join("VC Workspace")
             .join("Agent")
     } else {
-        PathBuf::from("/var/lib/vc-vdi")
+        PathBuf::from("/var/lib/vc-workspace")
     }
 }
 
@@ -229,7 +292,7 @@ mod tests {
     fn arguments_are_validated() {
         let parsed = parse_args([
             "--state-dir".into(),
-            "/tmp/vc-vdi-test".into(),
+            "/tmp/vc-workspace-test".into(),
             "--interval-seconds".into(),
             "30".into(),
             "--once".into(),
@@ -238,20 +301,36 @@ mod tests {
         let ParseResult::Run(config) = parsed else {
             panic!("expected runnable config")
         };
-        assert_eq!(config.state_dir, PathBuf::from("/tmp/vc-vdi-test"));
+        assert_eq!(config.state_dir, PathBuf::from("/tmp/vc-workspace-test"));
         assert_eq!(config.interval, Duration::from_secs(30));
         assert!(config.once);
+        assert!(!config.readiness_only);
         assert!(parse_args(["--interval-seconds".into(), "1".into()]).is_err());
     }
 
     #[test]
+    fn readiness_only_is_explicit_and_linux_only() {
+        let parsed = parse_args(["--readiness-only".into(), "--once".into()]);
+        #[cfg(target_os = "linux")]
+        {
+            let ParseResult::Run(config) = parsed.unwrap() else {
+                panic!("expected readiness config")
+            };
+            assert!(config.readiness_only && config.once);
+        }
+        #[cfg(not(target_os = "linux"))]
+        assert!(parsed.is_err());
+    }
+
+    #[test]
     fn readiness_state_creates_the_control_plane_marker() {
-        let temp = env::temp_dir().join(format!("vc-vdi-agent-test-{}", unix_time()));
+        let temp = env::temp_dir().join(format!("vc-workspace-agent-test-{}", unix_time()));
         let config = Config {
             state_dir: temp.clone(),
             address: "127.0.0.1:3389".parse().unwrap(),
             interval: Duration::from_secs(15),
             once: true,
+            readiness_only: false,
         };
         write_state(&config, 42, true).expect("write state");
         let state = fs::read_to_string(temp.join("agent-state.json")).expect("read state");

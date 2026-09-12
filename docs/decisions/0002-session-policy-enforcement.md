@@ -3,7 +3,7 @@
 | 字段 | 值 |
 |---|---|
 | 状态 | Accepted |
-| 实现 | Planned（M11–M12） |
+| 实现 | In progress（M11.1 桌面级纵向切片） |
 | 日期 | 2026-09-02 |
 
 ## 决定
@@ -30,6 +30,14 @@
 - 水印优先由 Guest Agent 的会话内顶层覆盖层渲染，客户端再叠加一层作为纵深防御。外部相机和操作系统之外的采集无法被软件绝对阻止，产品文案不得声称“不可截图”。
 
 背景图片进入受控资源库，上传时校验类型、尺寸和哈希；会话只引用不可变资源版本，不直接接受任意 URL。
+
+## 当前实现状态
+
+首个 M11.1 纵向切片把本地权限和三项会话设置统一保存在每桌面的 `desktop_access_policies`：文本剪贴板默认允许、驱动器重定向默认禁止、品牌背景默认受管。任一字段变化都会递增 `desired_revision`，运行中的桌面立即通过 QEMU Guest Agent 收敛；连接前再次强制收敛，失败时不签发 RDP 描述符。描述符携带版本、已应用 revision、三项布尔值及规范化 JSON 的 SHA-256；macOS 客户端重新计算并比对摘要后，才把剪贴板/驱动器限制交给内嵌 FreeRDP。
+
+Debian 执行端同时更新 xrdp 的 `[Channels]` 中 `cliprdr`/`rdpdr`，sesman 的入站/出站剪贴板限制与 FUSE 磁盘挂载，并只在配置变化时重启 xrdp。所需键不存在时会在正确 section 中插入，section 缺失则失败关闭。受管背景在登录时由 XDG autostart 应用；控制面使用小于 QGA 单文件上限的 1920×1080 JPEG 兼容旧 Guest，正式模板中的 4K PNG 仍优先。Windows 执行端已按 Remote Desktop Services 机器策略写入剪贴板和驱动器重定向注册表，并安装登录背景 helper，但尚未完成 Windows 实机验收。
+
+当前 SHA-256 只是确定性快照摘要，不是密码学签名；策略仍只有桌面作用域，Guest 也尚未独立回报已应用摘要。因此全局/镜像/桌面池/用户/组解析器、签名与轮换、Guest 报告、Windows 实机、macOS 实际禁用复制/映射验收仍是 POLICY-01 的退出条件。官方实现依据为 [xrdp.ini](https://github.com/neutrinolabs/xrdp/blob/devel/docs/man/xrdp.ini.5.in)、[sesman.ini](https://github.com/neutrinolabs/xrdp/blob/devel/docs/man/sesman.ini.5.in)、[Microsoft RemoteDesktopServices Policy CSP](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-remotedesktopservices) 与 [FreeRDP 客户端参数定义](https://github.com/FreeRDP/FreeRDP/blob/master/client/common/cmdline.h)。
 
 ## 排期
 

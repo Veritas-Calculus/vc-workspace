@@ -10,13 +10,30 @@ permissions:
 jobs:
   core:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: vcw-ci-disposable
+          POSTGRES_DB: vcw_ci_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      VC_WORKSPACE_TEST_DATABASE_URL: postgres://postgres:vcw-ci-disposable@127.0.0.1:5432/vcw_ci_test?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27'
           cache: true
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Install Linux Computer Use build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev libdbus-1-dev libdrm-dev libegl1-mesa-dev libgbm-dev libpipewire-0.3-dev libwayland-dev libx11-dev libxcb1-dev libxkbcommon-dev libxrandr-dev libxtst-dev pkg-config
       - uses: pnpm/action-setup@v4
         with:
           version: 10.33.0
@@ -27,39 +44,98 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: go test ./...
       - run: go vet ./...
+      - name: Check reachable Go vulnerabilities
+        run: GOTOOLCHAIN=local go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+      - run: go test -race ./internal/store ./internal/httpapi ./internal/gateway ./internal/guestdesktop -count=2
+      - name: Build control-plane container including embedded assets
+        run: docker build -f deploy/container/control-plane.Dockerfile -t vc-workspace-control-plane:ci .
+      - name: Build standalone TLS session Gateway
+        run: docker build -f deploy/container/session-gateway.Dockerfile -t vc-workspace-session-gateway:ci .
+      - run: make iac-check
       - run: cargo test --workspace
       - run: pnpm check
       - run: pnpm test
       - run: pnpm build
+      - run: pnpm --filter @vc-workspace/web exec playwright install --with-deps chromium
+      - name: Browser session and job recovery on the production build
+        run: |
+          pnpm --filter @vc-workspace/web exec vite preview --host 127.0.0.1 --port 5188 --strictPort &
+          vcw_preview_pid=$!
+          trap 'kill "$vcw_preview_pid"' EXIT
+          curl --retry 15 --retry-connrefused --retry-delay 1 --fail --silent http://127.0.0.1:5188/console > /dev/null
+          pnpm --filter @vc-workspace/web test:browser
 
   macos:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: true
       - run: swift test
         working-directory: clients/macos
       - run: ./scripts/build-app.sh release
         working-directory: clients/macos
+      - name: Mac WSS tunnel and bundled native Guest certificate pin
+        run: make macos-gateway-check
+      - name: Native RDP reactivation and receive-failure classification
+        run: make macos-rdp-reactivation-check
       - run: plutil -lint 'App/Info.plist'
         working-directory: clients/macos
       - run: codesign --verify --deep --strict --verbose=2 '.build/app/VC Workspace.app'
         working-directory: clients/macos
+
+  linux-computer-sessions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Separate real UIDs, displays, input and peer authentication
+        run: make computer-session-check
+
+  headless-session-worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: true
+      - name: Native TLS pin and process lifetime in an isolated Linux container
+        run: make session-worker-container-check
 
   guest-agent-artifacts:
     strategy:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: vc-vdi-guest-agent-linux-amd64
-            path: target/release/vc-vdi-guest-agent
+            artifact: vc-workspace-guest-agent-linux-amd64
+            path: |
+              target/release/vc-workspace-guest-agent
+              target/release/pam_vcworkspace.so
+              target/release/pam_vcworkspace_native.so
           - os: windows-latest
-            artifact: vc-vdi-guest-agent-windows-amd64
-            path: target/release/vc-vdi-guest-agent.exe
+            artifact: vc-workspace-guest-agent-windows-amd64
+            path: target/release/vc-workspace-guest-agent.exe
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build --release --package vc-vdi-guest-agent
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Install Linux Computer Use build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev libdbus-1-dev libdrm-dev libegl1-mesa-dev libgbm-dev libpipewire-0.3-dev libwayland-dev libx11-dev libxcb1-dev libxkbcommon-dev libxrandr-dev libxtst-dev libpam0g-dev libsystemd-dev pkg-config
+      - run: cargo build --release --package vc-workspace-guest-agent
+      - name: Build the in-process Linux PAM bridge
+        if: runner.os == 'Linux'
+        run: cc -O2 -Wall -Wextra -Werror -fPIC -fvisibility=hidden -shared -Wl,-z,relro,-z,now,-z,noexecstack,-z,defs -o target/release/pam_vcworkspace.so crates/guest-agent/native/linux/pam_vcworkspace.c -lpam -lsystemd
+      - name: Build the separate Native Linux PAM bridge
+        if: runner.os == 'Linux'
+        run: cc -O2 -Wall -Wextra -Werror -fPIC -fvisibility=hidden -shared -DVC_WORKSPACE_NATIVE_PAM -Wl,-z,relro,-z,now,-z,noexecstack,-z,defs -o target/release/pam_vcworkspace_native.so crates/guest-agent/native/linux/pam_vcworkspace.c -lpam -lsystemd
+      - name: Windows session identity and authenticated pipe regression
+        if: runner.os == 'Windows'
+        run: cargo test --locked -p vc-workspace-windows-session -- --test-threads=1
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}

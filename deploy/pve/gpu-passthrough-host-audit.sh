@@ -2,12 +2,12 @@
 set -euo pipefail
 
 device_id="${1:-0000:00:02.0}"
-sysfs_root="${VC_VDI_SYSFS_ROOT:-/sys}"
-proc_cmdline_file="${VC_VDI_PROC_CMDLINE_FILE:-/proc/cmdline}"
-etc_root="${VC_VDI_ETC_ROOT:-/etc}"
-qm_bin="${VC_VDI_QM_BIN:-qm}"
-pct_bin="${VC_VDI_PCT_BIN:-pct}"
-oob_confirmed="${VC_VDI_OUT_OF_BAND_CONSOLE_CONFIRMED:-false}"
+sysfs_root="${VC_WORKSPACE_SYSFS_ROOT:-/sys}"
+proc_cmdline_file="${VC_WORKSPACE_PROC_CMDLINE_FILE:-/proc/cmdline}"
+etc_root="${VC_WORKSPACE_ETC_ROOT:-/etc}"
+qm_bin="${VC_WORKSPACE_QM_BIN:-qm}"
+pct_bin="${VC_WORKSPACE_PCT_BIN:-pct}"
+oob_confirmed="${VC_WORKSPACE_OUT_OF_BAND_CONSOLE_CONFIRMED:-false}"
 device_path="${sysfs_root}/bus/pci/devices/${device_id}"
 reasons=()
 

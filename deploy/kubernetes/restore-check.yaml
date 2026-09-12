@@ -1,0 +1,51 @@
+# Disposable restore destination: no PVC, no Service and default-denied network.
+# Apply only in the isolated vc-workspace namespace, never to the source DB.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vc-workspace-restore-check
+  namespace: vc-workspace
+  labels:
+    app.kubernetes.io/part-of: vc-workspace
+    vc-workspace.io/acceptance: restore-check
+spec:
+  restartPolicy: Never
+  activeDeadlineSeconds: 900
+  automountServiceAccountToken: false
+  imagePullSecrets: [{name: vc-workspace-registry}]
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 70
+    runAsGroup: 70
+    fsGroup: 70
+    seccompProfile: {type: RuntimeDefault}
+  containers:
+    - name: postgres
+      image: harbor.infra.plz.ac/vc-workspace/postgres@sha256:7abf537131b66ed5af448d90653abf1679b0c7e9a1f07efdd4c3108a401b259a
+      args: ['-c', 'listen_addresses=']
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: {drop: [ALL]}
+      env:
+        - {name: POSTGRES_DB, value: vc_workspace_restore}
+        - {name: POSTGRES_USER, value: vc_workspace}
+        - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef: {name: vc-workspace-postgres, key: POSTGRES_PASSWORD}
+      readinessProbe:
+        exec:
+          command: [pg_isready, -U, vc_workspace, -d, vc_workspace_restore]
+        periodSeconds: 2
+      resources:
+        requests: {cpu: 50m, memory: 128Mi}
+        limits: {memory: 512Mi}
+      volumeMounts:
+        - {name: data, mountPath: /var/lib/postgresql/data}
+        - {name: run, mountPath: /var/run/postgresql}
+        - {name: tmp, mountPath: /tmp}
+  volumes:
+    - {name: data, emptyDir: {}}
+    - {name: run, emptyDir: {}}
+    - {name: tmp, emptyDir: {}}

@@ -29,6 +29,17 @@ make check
 
 需要真实 PVE 的 `*-live-*` 目标不在 CI 运行，只在你自己的验收环境执行，结果写入 [MVP 开发计划](docs/plan/mvp.md)。
 
+### 数据库集成回归
+
+设置 `VC_WORKSPACE_TEST_DATABASE_URL` 才会执行数据库集成测试；未设置时跳过，不代表通过。使用专用回归数据库，不要指向开发库、生产库或正在用于实机验收的控制面数据库。测试按随机 schema 隔离并清理数据，但仍共享数据库进程、磁盘、WAL 和连接资源；schema 隔离不等于容量或故障隔离。
+
+```bash
+VC_WORKSPACE_TEST_DATABASE_URL='postgres://user:password@127.0.0.1:5432/vcw_test' \
+  go test -race -p=1 ./internal/store ./internal/httpapi -count=1 -timeout=5m
+```
+
+运行前检查数据盘和 WAL 的可用空间，并使用独立持久化卷。不要在承载验收状态的小容量 tmpfs 上运行全量迁移回归；临时盘写满会影响同库其他 schema，容器退出还可能丢失整个临时数据目录。数据库出现恢复/磁盘错误后先停止测试并检查数据库终态，不重复重跑测试或重启容器。恢复旧备份后，先核对外部 Guest 的账号版本、连接和撤销状态，不能直接启动控制面，也不能降低 Guest 的版本栅栏以适配旧库。
+
 ## 变更要求
 
 - 功能变更必须在同一提交中同步更新 [api/openapi.yaml](api/openapi.yaml) 和对应文档。契约与实现分离的提交不会被合并。

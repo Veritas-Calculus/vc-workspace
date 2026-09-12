@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import {
+  CircleUserRound,
   Hammer,
   LogOut,
   Plus,
   RefreshCw,
 } from 'lucide-react'
-import { changePower, createAgentPrincipal, createDesktop, createInitialAdmin, createLocalUser, createPCIResourceMapping, getAccessControl, getDesktopAccessPolicy, getInfrastructure, getJob, getJobs, getMe, getPlatformConfig, getSystem, login, logout, reconcileAccessControl, rotateAgentToken, setDesktopAssignment, startImageBuild, updateAgentPrincipal, updateDesktopAccessPolicy, updateGPUProfile, updateImageProfile, updateUser, type AccessControl, type DesktopAccessPolicy, type GPUProfile, type ImageProfile, type Infrastructure, type Job, type PCIResourceMapping, type PCIResourceMappingInput, type PlatformConfig, type Session, type SystemState } from './api'
+import { changePassword, changePower, createAgentPrincipal, createAPIToken, createDesktop, createIdentityGroup, createInitialAdmin, createLocalUser, createPCIResourceMapping, getAccessControl, getDesktopAccessPolicy, getInfrastructure, getJobs, getMe, getPlatformConfig, getSystem, login, logout, putIdentityProfile, reconcileAccessControl, reconcileManagedDesktopIdentity, resetUserPassword, revokeAPIToken, rotateAgentToken, setDesktopAssignment, setIdentityGroupMembership, startImageBuild, updateAgentPrincipal, updateDesktopAccessPolicy, updateGPUProfile, updateIdentityGroup, updateImageProfile, updateManagedDesktopIdentity, updateUser, type AccessControl, type DesktopAccessPolicy, type GPUProfile, type ImageProfile, type Infrastructure, type Job, type PCIResourceMapping, type PCIResourceMappingInput, type PlatformConfig, type Session, type SystemState } from './api'
+import { isPendingJob, pollJob } from './job-polling'
 import { message, type Locale, type MessageKey } from './i18n'
 import { FormField } from './components/form-field'
 import { ProductBrand, ThemeLocaleButtons } from './components/site-chrome'
@@ -13,6 +15,7 @@ import { ErrorState, LoadingState } from './components/states'
 import { AuditView } from './console/audit'
 import { AccessView } from './console/access'
 import { ActivityView, DesktopsView, GPUProfilesView, ImageProfilesView, InfrastructureView, WORKSPACES, eligibleNodesForGPU, imageBuildStatusMessage, managedDesktops, type ConsoleView, type Translator } from './console/workspaces'
+import { applyImageBuildJob } from './image-build-state'
 import { isConsolePath, LandingPage } from './landing'
 
 export { eligibleNodesForGPU } from './console/workspaces'
@@ -72,7 +75,7 @@ export function App() {
     const next = locale === 'zh-CN' ? 'en' : 'zh-CN'
     setLocale(next)
     document.documentElement.lang = next
-    localStorage.setItem('vc-vdi-locale', next)
+    localStorage.setItem('vc-workspace-locale', next)
   }, [locale])
 
   const switchTheme = useCallback(() => {
@@ -81,7 +84,7 @@ export function App() {
     document.documentElement.dataset.theme = next
     document.documentElement.dataset.themeMode = next
     document.documentElement.style.colorScheme = next
-    localStorage.setItem('vc-vdi-theme', next)
+    localStorage.setItem('vc-workspace-theme', next)
   }, [theme])
 
   const preferences = { locale, theme, t, switchLocale, switchTheme }
@@ -108,6 +111,11 @@ function ConsoleApp({ locale, theme, t, switchLocale, switchTheme }: PreferenceP
   const [activeJob, setActiveJob] = useState<Job | null>(null)
 	const [activeImageBuild, setActiveImageBuild] = useState<Job | null>(null)
   const [operationError, setOperationError] = useState('')
+  const [jobUpdatesFailed, setJobUpdatesFailed] = useState(false)
+  const [imageUpdatesFailed, setImageUpdatesFailed] = useState(false)
+  const [pollRetry, setPollRetry] = useState(0)
+	const [accountOpen, setAccountOpen] = useState(false)
+	const accountTrigger = useRef<HTMLButtonElement | null>(null)
 	  const load = useCallback(async () => {
     if (boot.kind !== 'ready' || !boot.session) return
 		const admin = boot.session.user.role === 'platform_admin'
@@ -194,25 +202,21 @@ function ConsoleApp({ locale, theme, t, switchLocale, switchTheme }: PreferenceP
 	  const upsertJob = useCallback((job: Job) => {
 	    setJobState((current) => current.kind !== 'ready' ? current : { kind: 'ready', data: [job, ...current.data.filter((item) => item.id !== job.id)].slice(0, 50) })
 	  }, [])
+  const updateImageBuild = useCallback((job: Job) => {
+    setActiveImageBuild(job)
+    upsertJob(job)
+    setPlatformState((current) => current.kind !== 'ready' ? current : { kind: 'ready', data: applyImageBuildJob(current.data, job) })
+  }, [upsertJob])
 
-	  useEffect(() => {
-	    if (!activeJob || (activeJob.state !== 'accepted' && activeJob.state !== 'running')) return
-    const controller = new AbortController()
-    const timer = window.setInterval(async () => {
-      try {
-	        const next = await getJob(activeJob.id, controller.signal)
-	        setActiveJob(next)
-	        upsertJob(next)
-	        if (next.state !== 'accepted' && next.state !== 'running') {
-          window.clearInterval(timer)
-          void load()
-        }
-      } catch {
-        window.clearInterval(timer)
-      }
-    }, 1200)
-    return () => { controller.abort(); window.clearInterval(timer) }
-	  }, [activeJob, load, upsertJob])
+  const activeJobID = activeJob?.id
+  const activeJobPending = isPendingJob(activeJob)
+  const activeImageID = activeImageBuild?.id
+  const activeImagePending = isPendingJob(activeImageBuild)
+  useEffect(() => {
+    setJobUpdatesFailed(false)
+    if (!activeJobID || !activeJobPending) return
+    return pollJob(activeJobID, (job) => { setActiveJob(job); upsertJob(job) }, setJobUpdatesFailed, () => { void load() })
+  }, [activeJobID, activeJobPending, load, upsertJob, pollRetry])
 
 	useEffect(() => {
 		if (platformState.kind !== 'ready') return
@@ -220,24 +224,11 @@ function ConsoleApp({ locale, theme, t, switchLocale, switchTheme }: PreferenceP
 		if (running && activeImageBuild?.id !== running.id) setActiveImageBuild(running)
 	}, [activeImageBuild?.id, platformState])
 
-	useEffect(() => {
-		if (!activeImageBuild || (activeImageBuild.state !== 'running' && activeImageBuild.state !== 'accepted')) return
-		const controller = new AbortController()
-		const timer = window.setInterval(async () => {
-			try {
-				const next = await getJob(activeImageBuild.id, controller.signal)
-				setActiveImageBuild(next)
-				upsertJob(next)
-				if (next.state !== 'running' && next.state !== 'accepted') {
-					window.clearInterval(timer)
-					void load()
-				}
-			} catch {
-				window.clearInterval(timer)
-			}
-		}, 1500)
-		return () => { controller.abort(); window.clearInterval(timer) }
-	}, [activeImageBuild, load, upsertJob])
+  useEffect(() => {
+    setImageUpdatesFailed(false)
+    if (!activeImageID || !activeImagePending) return
+    return pollJob(activeImageID, updateImageBuild, setImageUpdatesFailed, () => { void load() })
+  }, [activeImageID, activeImagePending, load, updateImageBuild, pollRetry])
 
   const authActions = <div className="auth-actions"><ThemeLocaleButtons t={t} theme={theme} onLocale={switchLocale} onTheme={switchTheme} /></div>
 
@@ -300,8 +291,7 @@ function ConsoleApp({ locale, theme, t, switchLocale, switchTheme }: PreferenceP
 	}
 	const saveAndBuildImage = async (profile: ImageProfile, input: Parameters<typeof updateImageProfile>[1], secrets: { builder_password: string; windows_product_key: string }) => {
 		const job = await startImageBuild(profile.id, input, secrets, activeSession.csrf_token)
-		setActiveImageBuild(job)
-		upsertJob(job)
+		updateImageBuild(job)
 		closeImageProfile()
 	}
 	const saveGPUProfile = async (profile: GPUProfile, input: Parameters<typeof updateGPUProfile>[1]) => {
@@ -347,7 +337,7 @@ function ConsoleApp({ locale, theme, t, switchLocale, switchTheme }: PreferenceP
       ? <LoadingState label={t('loading')} />
       : jobState.kind === 'error'
         ? <ErrorState title={t('unavailable')} detail={jobState.message} action={t('retry')} onRetry={load} />
-        : <ActivityView jobs={jobState.data} locale={locale} t={t} />,
+        : <ActivityView jobs={jobState.data} locale={locale} t={t} csrf={activeSession.csrf_token} onJob={upsertJob} />,
     infrastructure: state.kind === 'loading'
       ? <LoadingState label={t('loading')} />
       : state.kind === 'error'
@@ -386,6 +376,16 @@ function ConsoleApp({ locale, theme, t, switchLocale, switchTheme }: PreferenceP
 						const updated = await updateUser(user.id, disabled, activeSession.csrf_token)
 						setAccessState((current) => current.kind === 'ready' ? { kind: 'ready', data: { ...current.data, users: current.data.users.map((item) => item.id === updated.id ? updated : item) } } : current)
 					}}
+					onResetUserPassword={(user, password) => resetUserPassword(user.id, password, activeSession.csrf_token)}
+					onCreateAPIToken={async (input) => {
+						const credential = await createAPIToken(input, activeSession.csrf_token)
+						setAccessState((current) => current.kind === 'ready' ? { kind: 'ready', data: { ...current.data, api_tokens: [credential.api_token, ...current.data.api_tokens] } } : current)
+						return credential
+					}}
+					onRevokeAPIToken={async (token) => {
+						await revokeAPIToken(token.id, activeSession.csrf_token)
+						setAccessState((current) => current.kind === 'ready' ? { kind: 'ready', data: { ...current.data, api_tokens: current.data.api_tokens.filter((item) => item.id !== token.id) } } : current)
+					}}
 					onSetAgentEnabled={async (agent, enabled) => {
 						const updated = await updateAgentPrincipal(agent.id, enabled, activeSession.csrf_token)
 						setAccessState((current) => current.kind === 'ready' ? { kind: 'ready', data: { ...current.data, agents: current.data.agents.map((item) => item.id === updated.id ? updated : item) } } : current)
@@ -393,9 +393,31 @@ function ConsoleApp({ locale, theme, t, switchLocale, switchTheme }: PreferenceP
 					onRotateAgentToken={(agent) => rotateAgentToken(agent.id, activeSession.csrf_token)}
 					onSetAssignment={async (subject, vmid, assigned) => {
 						await setDesktopAssignment(subject.type, subject.id, vmid, assigned, activeSession.csrf_token)
-						setAccessState((current) => current.kind !== 'ready' ? current : { kind: 'ready', data: { ...current.data, assignments: assigned
-							? [...current.data.assignments, { subject_type: subject.type, subject_id: subject.id, desktop_vmid: vmid, created_at: new Date().toISOString() }]
-							: current.data.assignments.filter((item) => !(item.subject_type === subject.type && item.subject_id === subject.id && item.desktop_vmid === vmid)) } })
+						setAccessState({ kind: 'ready', data: await getAccessControl() })
+					}}
+					onCreateGroup={async (input) => {
+						await createIdentityGroup(input, activeSession.csrf_token)
+						setAccessState({ kind: 'ready', data: await getAccessControl() })
+					}}
+					onSetGroupEnabled={async (group, enabled) => {
+						await updateIdentityGroup(group.id, enabled, activeSession.csrf_token)
+						setAccessState({ kind: 'ready', data: await getAccessControl() })
+					}}
+					onSetGroupMembership={async (groupID, userID, member) => {
+						await setIdentityGroupMembership(groupID, userID, member, activeSession.csrf_token)
+						setAccessState({ kind: 'ready', data: await getAccessControl() })
+					}}
+					onSetDesktopIdentity={async (desktop, input) => {
+						await updateManagedDesktopIdentity(desktop.vmid, input, activeSession.csrf_token)
+						setAccessState({ kind: 'ready', data: await getAccessControl() })
+					}}
+					onReconcileDesktopIdentity={async (desktop, input) => {
+						await reconcileManagedDesktopIdentity(desktop.vmid, input, activeSession.csrf_token)
+						setAccessState({ kind: 'ready', data: await getAccessControl() })
+					}}
+					onPutIdentityProfile={async (id, input) => {
+						await putIdentityProfile(id, input, activeSession.csrf_token)
+						setAccessState({ kind: 'ready', data: await getAccessControl() })
 					}}
 				/>,
     audit: activeSession.user.role === 'platform_admin' ? <AuditView locale={locale} t={t} /> : null,
@@ -412,7 +434,7 @@ function ConsoleApp({ locale, theme, t, switchLocale, switchTheme }: PreferenceP
           })}
         </nav>
         <div className="sidebar-footer">
-          <span className="account-name" title={activeSession.user.display_name}>{activeSession.user.display_name}</span>
+          <button ref={accountTrigger} className="account-button" type="button" onClick={() => setAccountOpen(true)} title={t('account')}><CircleUserRound aria-hidden="true" /><span className="account-name">{activeSession.user.display_name}</span></button>
           <div className="sidebar-actions">
             <ThemeLocaleButtons t={t} theme={theme} onLocale={switchLocale} onTheme={switchTheme} />
             <button className="icon-button" type="button" onClick={() => void handleLogout()} aria-label={t('logout')} title={t('logout')}><LogOut aria-hidden="true" /></button>
@@ -432,31 +454,68 @@ function ConsoleApp({ locale, theme, t, switchLocale, switchTheme }: PreferenceP
           </div>
         </header>
 
-        {activeWorkspace.showsDesktopJob && activeJob && <div className="job-notice" data-state={activeJob.state} role="status"><span>{activeJob.state === 'accepted' || activeJob.state === 'running' ? t('jobRunning') : activeJob.state === 'succeeded' ? t('jobSucceeded') : t('jobFailed')}</span><code>{activeJob.target_vmid ? `VM ${activeJob.target_vmid}` : activeJob.id}</code>{activeJob.error && <span>{activeJob.error}</span>}</div>}
+        {(jobUpdatesFailed || imageUpdatesFailed) && <div className="job-notice" data-state="failed" role="status"><span>{t('jobUpdatesDelayed')}</span><button className="button" type="button" onClick={() => setPollRetry((value) => value + 1)}>{t('retry')}</button></div>}
+        {activeWorkspace.showsDesktopJob && activeJob && !jobUpdatesFailed && <div className="job-notice" data-state={activeJob.state} role="status"><span>{activeJob.state === 'accepted' || activeJob.state === 'running' ? t('jobRunning') : activeJob.state === 'succeeded' ? t('jobSucceeded') : t('jobFailed')}</span><code>{activeJob.target_vmid ? `VM ${activeJob.target_vmid}` : activeJob.id}</code>{activeJob.error && <span>{activeJob.error}</span>}</div>}
         {activeWorkspace.showsDesktopJob && operationError && <div className="job-notice" data-state="failed" role="alert">{operationError}</div>}
-		{activeWorkspace.showsImageBuild && activeImageBuild && <div className="job-notice image-build-notice" data-state={activeImageBuild.state} role="status"><span>{activeImageBuild.state === 'accepted' || activeImageBuild.state === 'running' ? t('imageBuildRunning') : activeImageBuild.state === 'succeeded' ? t('imageBuildSucceeded') : t('imageBuildFailed')}</span><progress max={100} value={activeImageBuild.progress ?? 0} aria-label={t('imageBuildProgress')} /><span>{activeImageBuild.progress ?? 0}%</span>{activeImageBuild.detail && <span className="job-detail" title={activeImageBuild.detail}>{activeImageBuild.detail}</span>}{activeImageBuild.error && <span className="job-detail" title={activeImageBuild.error}>{activeImageBuild.error}</span>}</div>}
+		{activeWorkspace.showsImageBuild && activeImageBuild && !imageUpdatesFailed && <div className="job-notice image-build-notice" data-state={activeImageBuild.state} role="status"><span>{activeImageBuild.state === 'accepted' || activeImageBuild.state === 'running' ? t('imageBuildRunning') : activeImageBuild.state === 'succeeded' ? t('imageBuildSucceeded') : t('imageBuildFailed')}</span><progress max={100} value={activeImageBuild.progress ?? 0} aria-label={t('imageBuildProgress')} /><span>{activeImageBuild.progress ?? 0}%</span>{activeImageBuild.detail && <span className="job-detail" title={activeImageBuild.detail}>{activeImageBuild.detail}</span>}{activeImageBuild.error && <span className="job-detail" title={activeImageBuild.error}>{activeImageBuild.error}</span>}</div>}
 
         {workspaceContent[activeWorkspace.id]}
 		{data?.mutations_enabled && platform && <CreateDesktopDialog open={createOpen} data={data} platform={platform} t={t} onClose={closeCreateDesktop} onCreate={async (input) => { const job = await createDesktop(input, activeSession.csrf_token); setActiveJob(job); upsertJob(job); closeCreateDesktop() }} />}
 		{editingImage && platform && <ImageProfileDialog profile={editingImage} gpuProfiles={platform.gpu_profiles} canBuild={platform.image_builder_available} t={t} onClose={closeImageProfile} onSave={(input) => saveImageProfile(editingImage, input)} onSaveAndBuild={(input, secrets) => saveAndBuildImage(editingImage, input, secrets)} />}
 		{editingGPU && platform && <GPUProfileDialog profile={editingGPU} mappings={platform.pci_resource_mappings ?? []} devices={platform.gpu_devices} canMutate={Boolean(data?.mutations_enabled)} t={t} onClose={closeGPUProfile} onCreateMapping={createMapping} onSave={(input) => saveGPUProfile(editingGPU, input)} />}
-		{editingAccess && <DesktopAccessDialog machine={editingAccess} t={t} onClose={closeDesktopAccess} onSave={(mode) => updateDesktopAccessPolicy(editingAccess.vmid, mode, activeSession.csrf_token)} />}
+		{editingAccess && <DesktopAccessDialog machine={editingAccess} t={t} onClose={closeDesktopAccess} onSave={(policy) => updateDesktopAccessPolicy(editingAccess.vmid, policy, activeSession.csrf_token)} />}
+		{accountOpen && <AccountDialog session={activeSession} t={t} onClose={() => { setAccountOpen(false); window.requestAnimationFrame(() => accountTrigger.current?.focus()) }} onChangePassword={(currentPassword, newPassword) => changePassword({ current_password: currentPassword, new_password: newPassword }, activeSession.csrf_token)} />}
       </main>
     </div>
   )
 }
 
-function DesktopAccessDialog({ machine, t, onClose, onSave }: { machine: Infrastructure['virtual_machines'][number]; t: Translator; onClose: () => void; onSave: (mode: DesktopAccessPolicy['privilege_mode']) => Promise<DesktopAccessPolicy> }) {
+function AccountDialog({ session, t, onClose, onChangePassword }: { session: Session; t: Translator; onClose: () => void; onChangePassword: (currentPassword: string, newPassword: string) => Promise<void> }) {
+	const [values, setValues] = useState({ current: '', next: '', confirm: '' })
+	const [busy, setBusy] = useState(false)
+	const [error, setError] = useState('')
+	const [complete, setComplete] = useState(false)
+	const titleID = useId()
+	const dialogRef = (element: HTMLDialogElement | null) => { if (element && !element.open) element.showModal() }
+	const submit = async (event: React.FormEvent) => {
+		event.preventDefault()
+		if (busy) return
+		if (values.next !== values.confirm) {
+			setError(t('passwordsDoNotMatch'))
+			return
+		}
+		setBusy(true)
+		setError('')
+		try {
+			await onChangePassword(values.current, values.next)
+			setComplete(true)
+		} catch (submitError) {
+			setError(submitError instanceof Error ? submitError.message : t('unavailable'))
+		} finally {
+			setBusy(false)
+		}
+	}
+	return <dialog className="dialog" ref={dialogRef} onKeyDown={(event) => { if (event.key === 'Escape' && !busy) { event.preventDefault(); onClose() } }} onCancel={(event) => { event.preventDefault(); if (!busy) onClose() }} aria-labelledby={titleID}>
+		{session.user.identity_kind === 'oidc' ? <div className="credential-dialog"><h2 id={titleID}>{t('account')}</h2><div className="read-only-field"><span>{session.user.display_name}</span><code>{session.user.username}</code></div><p className="field-hint">{t('passwordManagedExternally')}</p><div className="dialog-actions"><button className="button button-primary" type="button" onClick={onClose}>{t('done')}</button></div></div>
+			: complete ? <div className="credential-dialog"><h2 id={titleID}>{t('passwordChanged')}</h2><p className="field-hint">{t('passwordChangedDetail')}</p><div className="dialog-actions"><button className="button button-primary" type="button" onClick={onClose}>{t('done')}</button></div></div>
+			: <form onSubmit={submit} aria-busy={busy} aria-describedby={error ? `${titleID}-error` : `${titleID}-hint`}><h2 id={titleID}>{t('changePassword')}</h2><p className="field-hint" id={`${titleID}-hint`}>{session.user.display_name} · {session.user.username}</p><FormField label={t('currentPassword')} type="password" value={values.current} onChange={(current) => setValues({ ...values, current })} autoComplete="current-password" maxLength={128} /><FormField label={t('newPassword')} type="password" value={values.next} onChange={(next) => setValues({ ...values, next })} autoComplete="new-password" minLength={12} maxLength={128} hint={t('passwordRequirement')} /><FormField label={t('confirmPassword')} type="password" value={values.confirm} onChange={(confirm) => setValues({ ...values, confirm })} autoComplete="new-password" minLength={12} maxLength={128} />{error && <p className="form-error" id={`${titleID}-error`} role="alert">{error}</p>}<div className="dialog-actions"><button className="button" type="button" disabled={busy} onClick={onClose}>{t('cancel')}</button><button className="button button-primary" type="submit" disabled={busy}>{busy ? t('saving') : t('changePassword')}</button></div></form>}
+	</dialog>
+}
+
+type DesktopAccessPolicyInput = Pick<DesktopAccessPolicy, 'privilege_mode' | 'clipboard_redirection' | 'drive_redirection' | 'managed_background'>
+
+function DesktopAccessDialog({ machine, t, onClose, onSave }: { machine: Infrastructure['virtual_machines'][number]; t: Translator; onClose: () => void; onSave: (policy: DesktopAccessPolicyInput) => Promise<DesktopAccessPolicy> }) {
 	const [policy, setPolicy] = useState<DesktopAccessPolicy | null>(null)
-	const [mode, setMode] = useState<DesktopAccessPolicy['privilege_mode']>('standard')
+	const [values, setValues] = useState<DesktopAccessPolicyInput>({ privilege_mode: 'standard', clipboard_redirection: true, drive_redirection: false, managed_background: true })
 	const [busy, setBusy] = useState(false)
 	const busyRef = useRef(false)
+	const applyButtonRef = useRef<HTMLButtonElement | null>(null)
 	const [error, setError] = useState('')
 	useEffect(() => {
 		const controller = new AbortController()
 		void getDesktopAccessPolicy(machine.vmid, controller.signal).then((value) => {
 			setPolicy(value)
-			setMode(value.privilege_mode)
+			setValues({ privilege_mode: value.privilege_mode, clipboard_redirection: value.clipboard_redirection, drive_redirection: value.drive_redirection, managed_background: value.managed_background })
 		}).catch((loadError) => {
 			if (loadError instanceof DOMException && loadError.name === 'AbortError') return
 			setError(loadError instanceof Error ? loadError.message : t('unavailable'))
@@ -468,23 +527,32 @@ function DesktopAccessDialog({ machine, t, onClose, onSave }: { machine: Infrast
 	}
 	const submit = async (event: React.FormEvent) => {
 		event.preventDefault()
-		if (busyRef.current || !policy) return
+		if (busyRef.current || !policy || !changed) return
 		busyRef.current = true
 		setBusy(true)
 		setError('')
 		try {
-			const updated = await onSave(mode)
+			const updated = await onSave(values)
 			setPolicy(updated)
+			setValues({ privilege_mode: updated.privilege_mode, clipboard_redirection: updated.clipboard_redirection, drive_redirection: updated.drive_redirection, managed_background: updated.managed_background })
 			if (updated.state === 'failed') setError(t('permissionApplyFailed'))
 		} catch (saveError) {
 			setError(saveError instanceof Error ? saveError.message : t('unavailable'))
 		} finally {
 			busyRef.current = false
 			setBusy(false)
+			window.requestAnimationFrame(() => applyButtonRef.current?.focus())
 		}
 	}
 	const stateLabel = policy?.state === 'applied' ? t('permissionApplied') : policy?.state === 'failed' ? t('permissionFailed') : t('permissionPending')
-	return <dialog className="dialog" ref={dialogRef} onKeyDown={(event) => { if (event.key === 'Escape' && !busy) { event.preventDefault(); onClose() } }} onCancel={(event) => { event.preventDefault(); if (!busy) onClose() }} onClose={() => { if (!busy) onClose() }} aria-labelledby="desktop-access-title"><form onSubmit={submit} aria-describedby={error ? 'desktop-access-error' : 'desktop-access-detail'}><h2 id="desktop-access-title">{t('desktopPermissions')} · {machine.name}</h2>{!policy && !error ? <p className="field-hint" role="status">{t('loadingPermissions')}</p> : policy && <><label className="form-field"><span>{t('localPrivilege')}</span><select value={mode} onChange={(event) => setMode(event.target.value as DesktopAccessPolicy['privilege_mode'])}><option value="standard">{t('standardUser')}</option><option value="local_admin">{t('localAdministrator')}</option></select></label><p className="field-hint" id="desktop-access-detail">{mode === 'standard' ? t('standardUserDetail') : t('localAdministratorDetail')}</p><div className="policy-state"><span>{t('enforcement')}</span><strong>{stateLabel}</strong></div>{mode !== policy.privilege_mode && machine.status === 'running' && <p className="field-hint">{t('permissionChangeSignOut')}</p>}</>}{error && <p className="form-error" id="desktop-access-error" role="alert">{error}</p>}<div className="dialog-actions"><button className="button" type="button" onClick={onClose} aria-disabled={busy}>{t('cancel')}</button><button className="button button-primary" type="submit" disabled={busy || !policy}>{busy ? t('saving') : t('apply')}</button></div></form></dialog>
+	const changed = Boolean(policy) && (values.privilege_mode !== policy?.privilege_mode || values.clipboard_redirection !== policy?.clipboard_redirection || values.drive_redirection !== policy?.drive_redirection || values.managed_background !== policy?.managed_background)
+	return <dialog className="dialog" ref={dialogRef} onKeyDown={(event) => { if (event.key === 'Escape' && !busy) { event.preventDefault(); onClose() } }} onCancel={(event) => { event.preventDefault(); if (!busy) onClose() }} onClose={() => { if (!busy) onClose() }} aria-labelledby="desktop-access-title"><form onSubmit={submit} aria-describedby={error ? 'desktop-access-error' : 'desktop-access-detail'}><h2 id="desktop-access-title">{t('desktopPermissions')} · {machine.name}</h2>{!policy && !error ? <p className="field-hint" role="status">{t('loadingPermissions')}</p> : policy && <><fieldset className="policy-section"><legend>{t('localPrivilege')}</legend><label className="form-field"><span>{t('accountType')}</span><select value={values.privilege_mode} onChange={(event) => setValues({ ...values, privilege_mode: event.target.value as DesktopAccessPolicy['privilege_mode'] })}><option value="standard">{t('standardUser')}</option><option value="local_admin">{t('localAdministrator')}</option></select></label><p className="field-hint" id="desktop-access-detail">{values.privilege_mode === 'standard' ? t('standardUserDetail') : t('localAdministratorDetail')}</p></fieldset><fieldset className="policy-section"><legend>{t('dataTransfer')}</legend><PolicyCheckbox id="clipboard-redirection" label={t('clipboardRedirection')} detail={t('clipboardRedirectionDetail')} checked={values.clipboard_redirection} onChange={(clipboard_redirection) => setValues({ ...values, clipboard_redirection })} /><PolicyCheckbox id="drive-redirection" label={t('driveRedirection')} detail={t('driveRedirectionDetail')} checked={values.drive_redirection} onChange={(drive_redirection) => setValues({ ...values, drive_redirection })} /></fieldset><fieldset className="policy-section"><legend>{t('desktopAppearance')}</legend><PolicyCheckbox id="managed-background" label={t('managedBackground')} detail={t('managedBackgroundDetail')} checked={values.managed_background} onChange={(managed_background) => setValues({ ...values, managed_background })} /></fieldset><div className="policy-state"><span>{t('enforcement')}</span><strong>{stateLabel}</strong></div>{changed && machine.status === 'running' && <p className="field-hint">{t('policyChangeReconnect')}</p>}</>}{error && <p className="form-error" id="desktop-access-error" role="alert">{error}</p>}<div className="dialog-actions"><button className="button" type="button" onClick={() => { if (!busy) onClose() }} aria-disabled={busy}>{t('cancel')}</button><button ref={applyButtonRef} className="button button-primary" type="submit" aria-disabled={busy || !policy || !changed}>{busy ? t('saving') : t('apply')}</button></div></form></dialog>
+}
+
+function PolicyCheckbox({ id, label, detail, checked, onChange }: { id: string; label: string; detail: string; checked: boolean; onChange: (checked: boolean) => void }) {
+	const detailID = `${id}-detail`
+	const labelID = `${id}-label`
+	return <label className="policy-option" htmlFor={id}><span className="policy-option-copy"><span className="policy-option-label" id={labelID}>{label}</span><span className="policy-option-detail" id={detailID}>{detail}</span></span><input id={id} type="checkbox" checked={checked} aria-labelledby={labelID} aria-describedby={detailID} onChange={(event) => onChange(event.target.checked)} /></label>
 }
 
 function GPUProfileDialog({ profile, mappings, devices, canMutate, t, onClose, onCreateMapping, onSave }: { profile: GPUProfile; mappings: PlatformConfig['pci_resource_mappings']; devices: PlatformConfig['gpu_devices']; canMutate: boolean; t: Translator; onClose: () => void; onCreateMapping: (input: PCIResourceMappingInput) => Promise<PCIResourceMapping>; onSave: (input: Parameters<typeof updateGPUProfile>[1]) => Promise<void> }) {
@@ -711,7 +779,7 @@ function CreateDesktopDialog({ open, data, platform, t, onClose, onCreate }: { o
 	const initialNodes = eligibleNodesForGPU(data, platform, initialGPU)
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState('')
-	const [name, setName] = useState('vc-vdi-')
+	const [name, setName] = useState('vc-workspace-')
 	const [sourceVMID, setSourceVMID] = useState(initialImage?.template_vmid ?? 0)
 	const [gpuProfileID, setGPUProfileID] = useState(initialGPU)
 	const [targetNode, setTargetNode] = useState(initialNodes[0]?.name ?? '')
@@ -773,5 +841,5 @@ function LoginForm({ system, t, onComplete }: { system: SystemState; t: (key: Me
     setBusy(true); setError('')
     try { onComplete(await login(values)) } catch (submitError) { setError(submitError instanceof Error ? submitError.message : t('unavailable')); setBusy(false) }
   }
-  return <form className="auth-form" onSubmit={submit} aria-label={t('login')} aria-describedby={error ? 'login-error' : undefined}>{system.oidc_configured && <><a className="button sso-button" href="/api/v1/auth/oidc/start">{t('continueWithSSO', { provider: system.oidc_name })}</a><div className="auth-divider"><span>{t('or')}</span></div></>}<FormField label={t('username')} value={values.username} onChange={(value) => setValues({ ...values, username: value })} autoComplete="username" /><FormField label={t('password')} type="password" value={values.password} onChange={(value) => setValues({ ...values, password: value })} autoComplete="current-password" />{error && <p className="form-error" id="login-error" role="alert">{error}</p>}<button className="button button-primary" type="submit" aria-disabled={busy}>{busy ? t('loggingIn') : t('login')}</button></form>
+  return <form className="auth-form" onSubmit={submit} aria-label={t('login')} aria-describedby={error ? 'login-error' : undefined}>{new URLSearchParams(window.location.search).get('session') === 'expired' && <p role="status" className="form-intro">{t('sessionExpired')}</p>}{system.oidc_configured && <><a className="button sso-button" href="/api/v1/auth/oidc/start">{t('continueWithSSO', { provider: system.oidc_name })}</a><div className="auth-divider"><span>{t('or')}</span></div></>}<FormField label={t('username')} value={values.username} onChange={(value) => setValues({ ...values, username: value })} autoComplete="username" /><FormField label={t('password')} type="password" value={values.password} onChange={(value) => setValues({ ...values, password: value })} autoComplete="current-password" />{error && <p className="form-error" id="login-error" role="alert">{error}</p>}<button className="button button-primary" type="submit" aria-disabled={busy}>{busy ? t('loggingIn') : t('login')}</button></form>
 }

@@ -1,0 +1,98 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: vc-workspace-public
+spec:
+  secretName: vc-workspace-tls
+  dnsNames: [ws.infra.plz.ac]
+  issuerRef:
+    name: cloudflare
+    kind: ClusterIssuer
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: vc-workspace-bootstrap
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: vc-workspace-internal-ca
+spec:
+  secretName: vc-workspace-internal-ca
+  commonName: VC Workspace internal transport CA
+  isCA: true
+  duration: 8760h
+  renewBefore: 2160h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Never
+  issuerRef:
+    name: vc-workspace-bootstrap
+    kind: Issuer
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: vc-workspace-internal
+spec:
+  ca:
+    secretName: vc-workspace-internal-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: vc-workspace-control-tls
+spec:
+  secretName: vc-workspace-control-tls
+  dnsNames: [vc-workspace-control-plane.vc-workspace.svc]
+  usages: [server auth]
+  duration: 2160h
+  renewBefore: 720h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    name: vc-workspace-internal
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: vc-workspace-gateway-client
+spec:
+  secretName: vc-workspace-gateway-client
+  commonName: infra-gateway
+  usages: [client auth]
+  duration: 2160h
+  renewBefore: 720h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    name: vc-workspace-internal
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: vc-workspace-gateway-tls
+spec:
+  secretName: vc-workspace-gateway-tls
+  dnsNames: [ws.infra.plz.ac]
+  usages: [server auth]
+  duration: 2160h
+  renewBefore: 720h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    name: vc-workspace-internal

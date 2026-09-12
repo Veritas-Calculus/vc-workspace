@@ -14,9 +14,9 @@
       (() => {
         const root = document.documentElement
         try {
-          const locale = localStorage.getItem('vc-vdi-locale')
+          const locale = localStorage.getItem('vc-workspace-locale') || localStorage.getItem('vc-vdi-locale')
           if (locale === 'en' || locale === 'zh-CN') root.lang = locale
-          const mode = localStorage.getItem('vc-vdi-theme')
+          const mode = localStorage.getItem('vc-workspace-theme') || localStorage.getItem('vc-vdi-theme')
           if (mode === 'light' || mode === 'dark') {
             root.dataset.themeMode = mode
             root.dataset.theme = mode

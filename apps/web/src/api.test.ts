@@ -1,7 +1,25 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getAuditEvents, setDesktopAssignment, startImageBuild, updateDesktopAccessPolicy } from './api'
+import { changePassword, createAPIToken, getAuditEvents, getCloneRecoveryEvidence, recoverClone, resetUserPassword, revokeAPIToken, setDesktopAssignment, startImageBuild, updateDesktopAccessPolicy } from './api'
 
 afterEach(() => vi.unstubAllGlobals())
+
+describe('clone recovery requests', () => {
+  it('loads private evidence with an encoded job ID and cancellation', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ job_id: 'job/a', candidates: [], target_status: 'target_absent' })))
+    vi.stubGlobal('fetch', fetchMock)
+    const signal = new AbortController().signal
+    await getCloneRecoveryEvidence('job/a', signal)
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/jobs/job%2Fa/clone-candidates', { signal, cache: 'no-store' })
+  })
+  it('submits only the selected handle and reason with CSRF, without retries', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ error: { code: 'recovery_commit_uncertain', message: 'Read original job' } }), { status: 503 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const input = { upid: 'UPID:test:1:', reason: 'Checked target' }
+    await expect(recoverClone('job/a', input, 'csrf')).rejects.toMatchObject({ status: 503, code: 'recovery_commit_uncertain' })
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/jobs/job%2Fa/clone-recovery', expect.objectContaining({ method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': 'csrf' }, body: JSON.stringify(input) }))
+  })
+})
 
 describe('startImageBuild', () => {
   it('submits configuration and one-time secrets in a single idempotent request', async () => {
@@ -42,19 +60,25 @@ describe('startImageBuild', () => {
 })
 
 describe('updateDesktopAccessPolicy', () => {
-  it('submits one allowlisted privilege mode with CSRF protection', async () => {
+  it('submits the complete session policy with CSRF protection', async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
-      vmid: 158, privilege_mode: 'local_admin', desired_revision: 2, applied_revision: 2,
+      vmid: 158, privilege_mode: 'local_admin', clipboard_redirection: false,
+      drive_redirection: false, managed_background: true, desired_revision: 2, applied_revision: 2,
       state: 'applied', os_family: 'linux', updated_at: '2026-09-02T00:00:00Z',
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await updateDesktopAccessPolicy(158, 'local_admin', 'csrf-token')
+    await updateDesktopAccessPolicy(158, {
+      privilege_mode: 'local_admin',
+      clipboard_redirection: false,
+      drive_redirection: false,
+      managed_background: true,
+    }, 'csrf-token')
 
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/virtual-machines/158/access-policy', expect.objectContaining({
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': 'csrf-token' },
-      body: JSON.stringify({ privilege_mode: 'local_admin' }),
+      body: JSON.stringify({ privilege_mode: 'local_admin', clipboard_redirection: false, drive_redirection: false, managed_background: true }),
     }))
   })
 })
@@ -81,6 +105,68 @@ describe('setDesktopAssignment', () => {
     await setDesktopAssignment('agent', 'research:agent.one', 201, false, 'csrf-token')
 
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/desktop-assignments/agent/research%3Aagent.one/201', {
+      method: 'DELETE',
+      headers: { 'X-CSRF-Token': 'csrf-token' },
+    })
+  })
+})
+
+describe('password management', () => {
+  it('changes the current local password with CSRF protection', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await changePassword({ current_password: 'OldPassword-123', new_password: 'NewPassword-456' }, 'csrf-token')
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/me/password', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': 'csrf-token' },
+      body: JSON.stringify({ current_password: 'OldPassword-123', new_password: 'NewPassword-456' }),
+    })
+  })
+
+  it('lets an administrator reset another local password', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await resetUserPassword('user/a', 'NewPassword-456', 'csrf-token')
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/users/user%2Fa/password', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': 'csrf-token' },
+      body: JSON.stringify({ new_password: 'NewPassword-456' }),
+    })
+  })
+})
+
+describe('IaC API credentials', () => {
+  it('creates a time-bounded credential with CSRF protection', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      api_token: {
+        id: 'token_123', name: 'Terraform production', expires_at: '2026-10-01T00:00:00Z',
+        created_at: '2026-09-05T00:00:00Z',
+      },
+      access_token: 'vcwi_secret',
+    }), { status: 201, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const credential = await createAPIToken({ name: 'Terraform production', expires_in_days: 30 }, 'csrf-token')
+
+    expect(credential.access_token).toBe('vcwi_secret')
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/api-tokens', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': 'csrf-token' },
+      body: JSON.stringify({ name: 'Terraform production', expires_in_days: 30 }),
+    })
+  })
+
+  it('revokes a credential by its encoded identifier', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await revokeAPIToken('token/a', 'csrf-token')
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/api-tokens/token%2Fa', {
       method: 'DELETE',
       headers: { 'X-CSRF-Token': 'csrf-token' },
     })

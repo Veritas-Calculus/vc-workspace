@@ -2,19 +2,19 @@
 import PackageDescription
 
 let package = Package(
-    name: "VCVDI",
+    name: "VCWorkspace",
     platforms: [.macOS(.v14)],
-    products: [.executable(name: "VCVDI", targets: ["VCVDI"])],
+    products: [.executable(name: "VCWorkspace", targets: ["VCWorkspace"])],
     targets: [
         .executableTarget(
-            name: "VCVDI",
-            path: "Sources/VCVDI",
+            name: "VCWorkspace",
+            path: "Sources/VCWorkspace",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(
-            name: "VCVDITests",
-            dependencies: ["VCVDI"],
-            path: "Tests/VCVDITests",
+            name: "VCWorkspaceTests",
+            dependencies: ["VCWorkspace"],
+            path: "Tests/VCWorkspaceTests",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]

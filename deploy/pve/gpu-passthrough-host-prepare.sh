@@ -4,11 +4,11 @@ set -euo pipefail
 device_id="0000:00:02.0"
 apply=false
 ack_headless=false
-sysfs_root="${VC_VDI_SYSFS_ROOT:-/sys}"
-etc_root="${VC_VDI_ETC_ROOT:-/etc}"
-qm_bin="${VC_VDI_QM_BIN:-qm}"
-pct_bin="${VC_VDI_PCT_BIN:-pct}"
-backup_root="${VC_VDI_BACKUP_ROOT:-/root}"
+sysfs_root="${VC_WORKSPACE_SYSFS_ROOT:-/sys}"
+etc_root="${VC_WORKSPACE_ETC_ROOT:-/etc}"
+qm_bin="${VC_WORKSPACE_QM_BIN:-qm}"
+pct_bin="${VC_WORKSPACE_PCT_BIN:-pct}"
+backup_root="${VC_WORKSPACE_BACKUP_ROOT:-/root}"
 
 usage() {
   printf 'usage: %s [--device PCI_ID] [--apply --ack-headless]\n' "$0"
@@ -85,10 +85,10 @@ fi
 vendor_id="${vendor#0x}"
 device_value="${device#0x}"
 kernel_args='intel_iommu=on iommu=pt initcall_blacklist=sysfb_init'
-grub_fragment="$etc_root/default/grub.d/99-vc-vdi-iommu.cfg"
+grub_fragment="$etc_root/default/grub.d/99-vc-workspace-iommu.cfg"
 kernel_cmdline="$etc_root/kernel/cmdline"
-vfio_config="$etc_root/modprobe.d/vc-vdi-vfio.conf"
-modules_config="$etc_root/modules-load.d/vc-vdi-vfio.conf"
+vfio_config="$etc_root/modprobe.d/vc-workspace-vfio.conf"
+modules_config="$etc_root/modules-load.d/vc-workspace-vfio.conf"
 
 printf 'mode=%s\ndevice=%s\nvendor=%s\ndevice_id=%s\nclass=%s\nboot_vga=%s\nbootloader=%s\nrunning_vms=%s\nrunning_containers=%s\n' \
   "$([[ "$apply" == true ]] && echo apply || echo plan)" "$device_id" "$vendor" "$device" "$class" "$boot_vga" "$bootloader" "$running_vms" "$running_containers"
@@ -124,7 +124,7 @@ if [[ "$boot_vga" == "1" && "$ack_headless" != true ]]; then
 fi
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-backup_dir="${backup_root}/vc-vdi-gpu-backup-${timestamp}"
+backup_dir="${backup_root}/vc-workspace-gpu-backup-${timestamp}"
 install -d -m 0700 "$backup_dir"
 created_files="$backup_dir/created-files"
 : >"$created_files"
@@ -144,7 +144,7 @@ write_config() {
   local content="$2"
   local temp_file
   install -d -m 0755 "$(dirname "$target")"
-  temp_file="$(mktemp "$(dirname "$target")/.vc-vdi.XXXXXX")"
+  temp_file="$(mktemp "$(dirname "$target")/.vc-workspace.XXXXXX")"
   printf '%s\n' "$content" >"$temp_file"
   chmod 0644 "$temp_file"
   mv -f -- "$temp_file" "$target"

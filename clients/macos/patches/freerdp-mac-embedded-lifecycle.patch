@@ -1,0 +1,22 @@
+--- a/client/Mac/MRDPView.m
++++ b/client/Mac/MRDPView.m
+@@ -97,7 +97,9 @@
+ 	NSScreen *screen = [[NSScreen screens] objectAtIndex:0];
+ 	NSRect screenFrame = [screen frame];
+ 
+-	if (freerdp_settings_get_bool(settings, FreeRDP_Fullscreen))
++	/* An embedded view must not change the application's fullscreen
++	 * presentation options. Its containing window owns that lifecycle. */
++	if (mfc->view_ownership && freerdp_settings_get_bool(settings, FreeRDP_Fullscreen))
+ 	{
+ 		if (!freerdp_settings_set_uint32(settings, FreeRDP_DesktopWidth, screenFrame.size.width))
+ 			return -1;
+@@ -105,7 +107,7 @@
+ 			return -1;
+ 		[self enterFullScreenMode:[NSScreen mainScreen] withOptions:nil];
+ 	}
+-	else
++	else if (mfc->view_ownership && [self isInFullScreenMode])
+ 	{
+ 		[self exitFullScreenModeWithOptions:nil];
+ 	}

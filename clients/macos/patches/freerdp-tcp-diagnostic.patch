@@ -1,0 +1,29 @@
+--- a/libfreerdp/core/tcp.c
++++ b/libfreerdp/core/tcp.c
+@@ -849,6 +849,7 @@
+ 					break;
+ 
+ 				default:
++					WLog_WARN(TAG, "VCW TCP connect error=%d", estatus);
+ 					goto fail;
+ 			}
+ 		}
+@@ -855,6 +856,10 @@
+ 	{
+ 		const DWORD wstatus = WaitForMultipleObjects(count, handles, FALSE, tout);
+ 		if (WAIT_OBJECT_0 != wstatus)
++		{
++			if (wstatus == WAIT_TIMEOUT)
++				WLog_WARN(TAG, "VCW TCP wait timed out");
+ 			goto fail;
++		}
+ 	}
+ 
+@@ -881,6 +886,7 @@
+ 		if (optval != 0)
+ 		{
+ 			char ebuffer[256] = WINPR_C_ARRAY_INIT;
++			WLog_WARN(TAG, "VCW TCP socket error=%d", (int)optval);
+ 			char hostname[512] = WINPR_C_ARRAY_INIT;
+ 			char serv[512] = WINPR_C_ARRAY_INIT;
+ 

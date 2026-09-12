@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Veritas-Calculus/vc-workspace/internal/auth"
+	"github.com/Veritas-Calculus/vc-workspace/internal/computer"
 )
 
 type Client struct {
@@ -58,13 +59,24 @@ type Job struct {
 	Error      string `json:"error,omitempty"`
 }
 
+type ComputerAction struct {
+	ControlEpoch  int64                   `json:"control_epoch"`
+	Operation     computer.Operation      `json:"operation"`
+	TimeoutMS     int                     `json:"timeout_ms,omitempty"`
+	Screenshot    *computer.Screenshot    `json:"screenshot,omitempty"`
+	Accessibility *computer.Accessibility `json:"accessibility,omitempty"`
+	Mouse         *computer.Mouse         `json:"mouse,omitempty"`
+	Key           *computer.Key           `json:"key,omitempty"`
+	Text          *computer.Text          `json:"text,omitempty"`
+}
+
 func New(baseURL, token string) (*Client, error) {
 	parsed, err := url.Parse(strings.TrimRight(baseURL, "/"))
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return nil, fmt.Errorf("VC_VDI_API_URL must be an absolute HTTP(S) URL")
+		return nil, fmt.Errorf("VC_WORKSPACE_API_URL must be an absolute HTTP(S) URL")
 	}
 	if token == "" {
-		return nil, fmt.Errorf("VC_VDI_INTERNAL_API_TOKEN is required")
+		return nil, fmt.Errorf("VC_WORKSPACE_INTERNAL_API_TOKEN is required")
 	}
 	return &Client{baseURL: parsed.String(), token: token, httpClient: &http.Client{Timeout: 45 * time.Second}}, nil
 }
@@ -113,11 +125,27 @@ func (c *Client) ChangePower(ctx context.Context, agentID, leaseID, action strin
 	return output, err
 }
 
+func (c *Client) ComputerAction(ctx context.Context, agentID, leaseID string, input ComputerAction) (computer.Response, error) {
+	var output computer.Response
+	path := "/api/v1/agent/desktop-leases/" + url.PathEscape(leaseID) + "/computer-actions?agent_id=" + url.QueryEscape(agentID)
+	// Bootstrap is longer than an ordinary control API call. Clone only the
+	// client settings, preserving connection pooling and concurrent callers.
+	requestClient, transportClient := *c, *c.httpClient
+	transportClient.Timeout = computer.APIActionTimeout + 5*time.Second
+	requestClient.httpClient = &transportClient
+	err := requestClient.doWithResponseLimit(ctx, http.MethodPost, path, input, &output, "", nil, 16<<20)
+	return output, err
+}
+
 func (c *Client) do(ctx context.Context, method, path string, input, output any, idempotencyKey string) error {
 	return c.doWithHeaders(ctx, method, path, input, output, idempotencyKey, nil)
 }
 
 func (c *Client) doWithHeaders(ctx context.Context, method, path string, input, output any, idempotencyKey string, headers map[string]string) error {
+	return c.doWithResponseLimit(ctx, method, path, input, output, idempotencyKey, headers, 1<<20)
+}
+
+func (c *Client) doWithResponseLimit(ctx context.Context, method, path string, input, output any, idempotencyKey string, headers map[string]string, maximum int64) error {
 	var body io.Reader
 	if input != nil {
 		encoded, err := json.Marshal(input)
@@ -146,9 +174,12 @@ func (c *Client) doWithHeaders(ctx context.Context, method, path string, input, 
 		return fmt.Errorf("control plane request: %w", err)
 	}
 	defer response.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	data, err := io.ReadAll(io.LimitReader(response.Body, maximum+1))
 	if err != nil {
 		return fmt.Errorf("read control plane response: %w", err)
+	}
+	if int64(len(data)) > maximum {
+		return fmt.Errorf("control plane response exceeds the transport limit")
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		var problem struct {

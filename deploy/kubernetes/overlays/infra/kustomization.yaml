@@ -1,0 +1,83 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: vc-workspace
+resources:
+  - ../../base
+  - certificates.yaml
+  - gateway.yaml
+  - network-policy.yaml
+images:
+  - name: ghcr.io/veritas-calculus/vc-workspace-control-plane
+    newName: harbor.infra.plz.ac/vc-workspace/control-plane
+    digest: sha256:0a3d449b8244a474aa891dad1b85dc5b8054d53a6e3a1e36b265e9f726f1c258
+  - name: ghcr.io/veritas-calculus/vc-workspace-mcp
+    newName: harbor.infra.plz.ac/vc-workspace/mcp
+    digest: sha256:1d63a1878966517164f1e58a1ee7a94b57dcaedd34970fc12f6740dffc91a618
+  - name: ghcr.io/veritas-calculus/vc-workspace-web
+    newName: harbor.infra.plz.ac/vc-workspace/web
+    digest: sha256:25a06051513dd68b3d88a022e30cff1b1cf2a422f8615f5a530ddf31246bced6
+  - name: harbor.infra.plz.ac/vc-workspace/session-gateway
+    digest: sha256:4e9df8b7b043a53bdd573801d0056a00fe90580251934db237ab46fc3ddb1824
+  - name: postgres
+    newName: harbor.infra.plz.ac/vc-workspace/postgres
+    digest: sha256:7abf537131b66ed5af448d90653abf1679b0c7e9a1f07efdd4c3108a401b259a
+patches:
+  - path: control-plane-patch.yaml
+  - target: {kind: Deployment}
+    patch: |-
+      - op: add
+        path: /spec/template/spec/imagePullSecrets
+        value: [{name: vc-workspace-registry}]
+  - target: {kind: StatefulSet}
+    patch: |-
+      - op: add
+        path: /spec/template/spec/imagePullSecrets
+        value: [{name: vc-workspace-registry}]
+  - target: {kind: Service, name: vc-workspace-control-plane}
+    patch: |-
+      - op: add
+        path: /spec/ports/-
+        value: {name: control-tls, port: 8444, targetPort: control-tls}
+  - target: {kind: ConfigMap, name: vc-workspace-control-plane}
+    patch: |-
+      - op: replace
+        path: /data/VC_WORKSPACE_PUBLIC_URL
+        value: https://ws.infra.plz.ac
+      - op: replace
+        path: /data/VC_WORKSPACE_PVE_ENDPOINT
+        value: https://pve.infra.plz.ac
+      - op: replace
+        path: /data/VC_WORKSPACE_PVE_MUTATIONS_ENABLED
+        value: 'true'
+  - target: {kind: Ingress, name: vc-workspace}
+    patch: |-
+      - op: add
+        path: /spec/ingressClassName
+        value: nginx
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: ws.infra.plz.ac
+      - op: replace
+        path: /spec/rules/0/host
+        value: ws.infra.plz.ac
+  - target: {kind: NetworkPolicy, name: web}
+    patch: |-
+      - op: add
+        path: /spec/ingress/0/from
+        value:
+          - namespaceSelector:
+              matchLabels: {kubernetes.io/metadata.name: ingress-nginx}
+            podSelector:
+              matchLabels: {app.kubernetes.io/name: ingress-nginx}
+  - target: {kind: NetworkPolicy, name: control-plane}
+    patch: |-
+      - op: replace
+        path: /spec/egress/1
+        value:
+          to:
+            - ipBlock: {cidr: 10.31.0.253/32}
+            - namespaceSelector:
+                matchLabels: {kubernetes.io/metadata.name: ingress-nginx}
+              podSelector:
+                matchLabels: {app.kubernetes.io/name: ingress-nginx}
+          ports: [{protocol: TCP, port: 443}]

@@ -1,0 +1,11 @@
+--- a/libfreerdp/cache/pointer.c
++++ b/libfreerdp/cache/pointer.c
+@@ -275,7 +275,8 @@
+ 
++	WLog_ERR(TAG, "cached pointer entry is absent");
+ 	return FALSE;
+ }
+ 
+ rdpPointer* pointer_cache_get(rdpPointerCache* pointer_cache, UINT32 index)
+ {
+ 	WINPR_ASSERT(pointer_cache);

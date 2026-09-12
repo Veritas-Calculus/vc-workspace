@@ -123,7 +123,7 @@ source "proxmox-iso" "windows_client" {
   vm_name                  = var.template_name
   template_name            = var.template_name
   template_description     = "VC Workspace Windows client, RDP, VirtIO, QEMU Guest Agent, Cloudbase-Init and VC Workspace Agent"
-  tags                     = "vc-vdi;template;windows;rdp"
+  tags                     = "vc-workspace;template;windows;rdp"
   task_timeout             = "90m"
 
   boot_iso {
@@ -157,6 +157,7 @@ source "proxmox-iso" "windows_client" {
     cd_files = [
       abspath("${path.root}/Enable-WinRM.ps1"),
       abspath("${path.root}/configure-template.ps1"),
+      abspath("${path.root}/../../../assets/brand/vc-workspace-desktop-background.png"),
       var.agent_binary,
       var.cloudbase_init_msi,
     ]

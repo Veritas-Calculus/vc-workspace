@@ -48,15 +48,20 @@ if [[ ! -f "${source_dir}/CMakeLists.txt" ]]; then
   tar -xzf "${archive}" --strip-components=1 -C "${source_dir}"
 fi
 
-freerdp_patch="${client_dir}/patches/freerdp-mac-clipboard.patch"
-if patch --dry-run --silent --batch --reverse -p1 -d "${source_dir}" < "${freerdp_patch}" >/dev/null 2>&1; then
-  : # already patched
-elif patch --dry-run --silent --batch --forward -p1 -d "${source_dir}" < "${freerdp_patch}" >/dev/null 2>&1; then
-  patch --silent --batch --forward -p1 -d "${source_dir}" < "${freerdp_patch}"
-else
-  echo "FreeRDP clipboard patch does not apply cleanly" >&2
-  exit 1
-fi
+for freerdp_patch in "${client_dir}/patches/freerdp-mac-clipboard.patch" "${client_dir}/patches/freerdp-mac-embedded-resize.patch" "${client_dir}/patches/freerdp-mac-embedded-lifecycle.patch" "${client_dir}/patches/freerdp-pointer-cache-diagnostic.patch" "${client_dir}/patches/freerdp-event-failure-status.patch" "${client_dir}/patches/freerdp-pointer-cache-trace.patch" "${client_dir}/patches/freerdp-mac-clipboard-read-policy.patch" "${client_dir}/patches/freerdp-mac-edit-actions.patch" "${client_dir}/patches/freerdp-tcp-diagnostic.patch"; do
+  # BSD patch may automatically flip a reverse probe back to forward. Force
+  # the requested direction, otherwise an unapplied patch looks installed.
+  if patch --dry-run --silent --batch --force --reverse --fuzz=0 -p1 -d "${source_dir}" < "${freerdp_patch}" >/dev/null 2>&1; then
+    : # already patched
+  elif patch --dry-run --silent --batch --force --forward --fuzz=0 -p1 -d "${source_dir}" < "${freerdp_patch}" >/dev/null 2>&1; then
+    patch --silent --batch --force --forward --fuzz=0 -p1 -d "${source_dir}" < "${freerdp_patch}"
+  else
+    echo "FreeRDP patch does not apply cleanly: ${freerdp_patch}" >&2
+    exit 1
+  fi
+done
+
+cp "${client_dir}/NativeRDP/VCWClipboardDelivery.h" "${source_dir}/client/Mac/VCWClipboardDelivery.h"
 
 if [[ ! -f "${openssl_source_dir}/Configure" ]]; then
   if [[ ! -f "${openssl_archive}" ]]; then
@@ -150,10 +155,17 @@ cmake -S "${source_dir}" -B "${build_dir}" -GNinja \
   -DCHANNEL_AINPUT=OFF
 
 cmake --build "${build_dir}" --target MacFreeRDP-library --parallel
+bash "${script_dir}/check-clipboard-read-policy.sh"
 
 bridge_dir="${build_dir}/vc-workspace"
 bridge_path="${bridge_dir}/libVCWorkspaceRDP.dylib"
 mkdir -p "${bridge_dir}"
+clang -std=c11 -Wall -Wextra -Werror "${client_dir}/NativeRDP/tests/display-presentation.c" -o "${bridge_dir}/display-presentation-test"
+"${bridge_dir}/display-presentation-test"
+clang -std=c11 -Wall -Wextra -Werror "${client_dir}/NativeRDP/tests/runtime-diagnostic.c" -o "${bridge_dir}/runtime-diagnostic-test"
+"${bridge_dir}/runtime-diagnostic-test"
+clang -std=c11 -Wall -Wextra -Werror -DVCW_TEST_WINPR_FORMAT "${client_dir}/NativeRDP/tests/runtime-diagnostic.c" -o "${bridge_dir}/runtime-diagnostic-winpr-test"
+"${bridge_dir}/runtime-diagnostic-winpr-test"
 clang -dynamiclib -std=gnu2x -mmacosx-version-min=14.0 \
   -fvisibility=hidden \
   -I"${source_dir}/client/Mac" \
@@ -161,11 +173,13 @@ clang -dynamiclib -std=gnu2x -mmacosx-version-min=14.0 \
   -I"${source_dir}/winpr/include" \
   -I"${build_dir}/include" \
   -I"${build_dir}/winpr/include" \
+  -I"${openssl_install_dir}/include" \
   "${client_dir}/NativeRDP/VCWorkspaceRDPBridge.m" \
   "${build_dir}/client/Mac/libMacFreeRDP-library.dylib" \
   "${build_dir}/client/common/libfreerdp-client3.3.dylib" \
   "${build_dir}/libfreerdp/libfreerdp3.3.dylib" \
   "${build_dir}/winpr/libwinpr/libwinpr3.3.dylib" \
+  "${openssl_install_dir}/lib/libcrypto.3.dylib" \
   -framework AppKit \
   -Wl,-rpath,@loader_path \
   -Wl,-install_name,@rpath/libVCWorkspaceRDP.dylib \

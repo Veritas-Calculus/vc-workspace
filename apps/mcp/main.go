@@ -12,9 +12,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/Veritas-Calculus/vc-workspace/internal/agentapi"
 	"github.com/Veritas-Calculus/vc-workspace/internal/auth"
+	"github.com/Veritas-Calculus/vc-workspace/internal/computer"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type noInput struct{}
@@ -33,23 +34,66 @@ type powerInput struct {
 	Action  string `json:"action" jsonschema:"power action: start or stop"`
 }
 
+type screenshotInput struct {
+	LeaseID      string `json:"lease_id" jsonschema:"active lease identifier"`
+	ControlEpoch int64  `json:"control_epoch" jsonschema:"current control_epoch returned with the lease"`
+	MaxWidth     int    `json:"max_width,omitempty" jsonschema:"maximum screenshot width in pixels, 320 to 3840; defaults to 1600"`
+	TimeoutMS    int    `json:"timeout_ms,omitempty" jsonschema:"bounded action timeout in milliseconds, 250 to 15000"`
+}
+
+type accessibilityInput struct {
+	LeaseID      string `json:"lease_id" jsonschema:"active lease identifier"`
+	ControlEpoch int64  `json:"control_epoch" jsonschema:"current control_epoch returned with the lease"`
+	MaxDepth     int    `json:"max_depth,omitempty" jsonschema:"maximum accessibility tree depth, 1 to 10; defaults to 6"`
+	MaxNodes     int    `json:"max_nodes,omitempty" jsonschema:"maximum returned accessibility nodes, 1 to 500; defaults to 300"`
+	TimeoutMS    int    `json:"timeout_ms,omitempty" jsonschema:"bounded action timeout in milliseconds, 250 to 15000"`
+}
+
+type mouseInput struct {
+	LeaseID      string `json:"lease_id" jsonschema:"active lease identifier"`
+	ControlEpoch int64  `json:"control_epoch" jsonschema:"current control_epoch returned with the lease"`
+	Action       string `json:"action" jsonschema:"mouse action: move, click, or scroll"`
+	X            int    `json:"x,omitempty" jsonschema:"absolute desktop x coordinate for move or click"`
+	Y            int    `json:"y,omitempty" jsonschema:"absolute desktop y coordinate for move or click"`
+	Button       string `json:"button,omitempty" jsonschema:"click button: left, right, or middle"`
+	DeltaX       int    `json:"delta_x,omitempty" jsonschema:"horizontal scroll steps from -100 to 100"`
+	DeltaY       int    `json:"delta_y,omitempty" jsonschema:"vertical scroll steps from -100 to 100"`
+	TimeoutMS    int    `json:"timeout_ms,omitempty" jsonschema:"bounded action timeout in milliseconds, 250 to 15000"`
+}
+
+type keyInput struct {
+	LeaseID      string   `json:"lease_id" jsonschema:"active lease identifier"`
+	ControlEpoch int64    `json:"control_epoch" jsonschema:"current control_epoch returned with the lease"`
+	Key          string   `json:"key" jsonschema:"allowlisted non-printable key, or one ASCII letter/digit when used with a modifier for a shortcut"`
+	Modifiers    []string `json:"modifiers,omitempty" jsonschema:"zero or more unique modifiers: control, alt, shift, meta"`
+	TimeoutMS    int      `json:"timeout_ms,omitempty" jsonschema:"bounded action timeout in milliseconds, 250 to 15000"`
+}
+
+type typeTextInput struct {
+	LeaseID      string `json:"lease_id" jsonschema:"active lease identifier"`
+	ControlEpoch int64  `json:"control_epoch" jsonschema:"current control_epoch returned with the lease"`
+	Text         string `json:"text" jsonschema:"UTF-8 text to type, at most 4096 bytes; the value is never placed in audit logs"`
+	Sensitive    bool   `json:"sensitive,omitempty" jsonschema:"mark text as sensitive for downstream redaction and policy"`
+	TimeoutMS    int    `json:"timeout_ms,omitempty" jsonschema:"bounded action timeout in milliseconds, 250 to 15000"`
+}
+
 type agentIdentity func(context.Context) (string, error)
 
 type agentContextKey struct{}
 
 func main() {
-	apiURL := os.Getenv("VC_VDI_API_URL")
+	apiURL := workspaceEnv("VC_WORKSPACE_API_URL", "VC_VDI_API_URL")
 	if apiURL == "" {
 		apiURL = "http://127.0.0.1:8080"
 	}
-	internalToken := os.Getenv("VC_VDI_INTERNAL_API_TOKEN")
-	transport := strings.ToLower(strings.TrimSpace(os.Getenv("VC_VDI_MCP_TRANSPORT")))
+	internalToken := workspaceEnv("VC_WORKSPACE_INTERNAL_API_TOKEN", "VC_VDI_INTERNAL_API_TOKEN")
+	transport := strings.ToLower(strings.TrimSpace(workspaceEnv("VC_WORKSPACE_MCP_TRANSPORT", "VC_VDI_MCP_TRANSPORT")))
 	if transport == "" {
 		transport = "stdio"
 	}
 	switch transport {
 	case "stdio":
-		identity, err := newStdioAgentIdentity(apiURL, internalToken, os.Getenv("VC_VDI_MCP_ACCESS_TOKEN"))
+		identity, err := newStdioAgentIdentity(apiURL, internalToken, workspaceEnv("VC_WORKSPACE_MCP_ACCESS_TOKEN", "VC_VDI_MCP_ACCESS_TOKEN"))
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -68,7 +112,7 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		address := os.Getenv("VC_VDI_MCP_HTTP_ADDR")
+		address := workspaceEnv("VC_WORKSPACE_MCP_HTTP_ADDR", "VC_VDI_MCP_HTTP_ADDR")
 		if address == "" {
 			address = "127.0.0.1:8090"
 		}
@@ -76,14 +120,21 @@ func main() {
 			log.Fatal(err)
 		}
 	default:
-		log.Fatalf("unsupported VC_VDI_MCP_TRANSPORT %q", transport)
+		log.Fatalf("unsupported VC_WORKSPACE_MCP_TRANSPORT %q", transport)
 	}
+}
+
+func workspaceEnv(primary, legacy string) string {
+	if value := os.Getenv(primary); value != "" {
+		return value
+	}
+	return os.Getenv(legacy)
 }
 
 func newStdioAgentIdentity(apiURL, internalAPIToken, accessToken string) (agentIdentity, error) {
 	accessToken = strings.TrimSpace(accessToken)
 	if accessToken == "" {
-		return nil, errors.New("VC_VDI_MCP_ACCESS_TOKEN is required for stdio transport")
+		return nil, errors.New("VC_WORKSPACE_MCP_ACCESS_TOKEN is required for stdio transport")
 	}
 	client, err := agentapi.New(apiURL, internalAPIToken)
 	if err != nil {
@@ -92,7 +143,7 @@ func newStdioAgentIdentity(apiURL, internalAPIToken, accessToken string) (agentI
 	return func(ctx context.Context) (string, error) {
 		agent, err := client.AuthenticateAgent(ctx, accessToken)
 		if err != nil || !agent.Enabled {
-			return "", errors.New("VC_VDI_MCP_ACCESS_TOKEN is invalid or disabled")
+			return "", errors.New("VC_WORKSPACE_MCP_ACCESS_TOKEN is invalid or disabled")
 		}
 		return agent.ID, nil
 	}, nil
@@ -152,6 +203,74 @@ func newMCPServer(apiURL, internalAPIToken string, identity agentIdentity) (*mcp
 			return nil, agentapi.Lease{}, err
 		}
 		output, err := client.ReleaseDesktop(ctx, agentID, input.LeaseID)
+		return nil, output, err
+	})
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "desktop_screenshot", Description: "Capture the primary monitor of the leased desktop as an MCP image. Metadata includes image dimensions and desktop_bounds in native input coordinates. Convert an image pixel (u,v) to mouse coordinates x=bounds.x+floor(u*bounds.width/image.width), y=bounds.y+floor(v*bounds.height/image.height). Use a fresh screenshot after any display change.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input screenshotInput) (*mcp.CallToolResult, screenshotOutput, error) {
+		agentID, err := identity(ctx)
+		if err != nil {
+			return nil, screenshotOutput{}, err
+		}
+		output, err := client.ComputerAction(ctx, agentID, input.LeaseID, agentapi.ComputerAction{
+			ControlEpoch: input.ControlEpoch, Operation: computer.OperationScreenshot, TimeoutMS: input.TimeoutMS,
+			Screenshot: &computer.Screenshot{MaxWidth: input.MaxWidth},
+		})
+		if err != nil {
+			return nil, screenshotOutput{}, err
+		}
+		return screenshotToolResult(output)
+	})
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "desktop_accessibility_snapshot", Description: "Read a bounded accessibility snapshot from the interactive desktop session. Use semantic information before coordinate input when available.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input accessibilityInput) (*mcp.CallToolResult, computer.Response, error) {
+		agentID, err := identity(ctx)
+		if err != nil {
+			return nil, computer.Response{}, err
+		}
+		output, err := client.ComputerAction(ctx, agentID, input.LeaseID, agentapi.ComputerAction{
+			ControlEpoch: input.ControlEpoch, Operation: computer.OperationAccessibility, TimeoutMS: input.TimeoutMS,
+			Accessibility: &computer.Accessibility{MaxDepth: input.MaxDepth, MaxNodes: input.MaxNodes},
+		})
+		return nil, output, err
+	})
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "desktop_mouse", Description: "Move, click, or scroll in the leased desktop using native desktop coordinates, not resized image pixels. Use a recent accessibility node's coordinates directly, or convert screenshot pixels using its desktop_bounds and image dimensions. Observe again after a display change.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input mouseInput) (*mcp.CallToolResult, computer.Response, error) {
+		agentID, err := identity(ctx)
+		if err != nil {
+			return nil, computer.Response{}, err
+		}
+		output, err := client.ComputerAction(ctx, agentID, input.LeaseID, agentapi.ComputerAction{
+			ControlEpoch: input.ControlEpoch, Operation: computer.OperationMouse, TimeoutMS: input.TimeoutMS,
+			Mouse: &computer.Mouse{Action: input.Action, X: input.X, Y: input.Y, Button: input.Button, DeltaX: input.DeltaX, DeltaY: input.DeltaY},
+		})
+		return nil, output, err
+	})
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "desktop_key", Description: "Send one allowlisted non-printable key chord to the leased interactive desktop.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input keyInput) (*mcp.CallToolResult, computer.Response, error) {
+		agentID, err := identity(ctx)
+		if err != nil {
+			return nil, computer.Response{}, err
+		}
+		output, err := client.ComputerAction(ctx, agentID, input.LeaseID, agentapi.ComputerAction{
+			ControlEpoch: input.ControlEpoch, Operation: computer.OperationKey, TimeoutMS: input.TimeoutMS,
+			Key: &computer.Key{Key: input.Key, Modifiers: input.Modifiers},
+		})
+		return nil, output, err
+	})
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "desktop_type_text", Description: "Type bounded UTF-8 text into the leased interactive desktop. Text content is excluded from audit logs.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input typeTextInput) (*mcp.CallToolResult, computer.Response, error) {
+		agentID, err := identity(ctx)
+		if err != nil {
+			return nil, computer.Response{}, err
+		}
+		output, err := client.ComputerAction(ctx, agentID, input.LeaseID, agentapi.ComputerAction{
+			ControlEpoch: input.ControlEpoch, Operation: computer.OperationTypeText, TimeoutMS: input.TimeoutMS,
+			Text: &computer.Text{Value: input.Text, Sensitive: input.Sensitive},
+		})
 		return nil, output, err
 	})
 	return server, nil
@@ -240,6 +359,10 @@ func newHTTPHandlerWithClient(apiURL string, agentClient *agentapi.Client, mcpSe
 
 func requireAgent(client *agentapi.Client, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Control-plane headers aren't forwarded by the MCP SDK. Apply the same
+		// no-storage boundary here for screenshots, semantic trees and leases.
+		w = &privateMCPResponseWriter{ResponseWriter: w}
+		w.Header().Set("Cache-Control", "no-store, no-transform")
 		provided, ok := auth.ParseBearerToken(r.Header.Get("Authorization"))
 		if !ok {
 			w.Header().Set("WWW-Authenticate", "Bearer")

@@ -1,0 +1,178 @@
+--- a/client/Mac/MRDPView.m
++++ b/client/Mac/MRDPView.m
+@@ -26,6 +26,7 @@
+ #import "Clipboard.h"
+ #import "PasswordDialog.h"
+ #import "CertificateDialog.h"
++#import "VCWClipboardDelivery.h"
+ 
+ #include <winpr/crt.h>
+ #include <winpr/assert.h>
+@@ -714,6 +858,57 @@
+ 
+ - (void)onPasteboardTimerFired:(NSTimer *)timer
+ {
++	/* The timer retains its channel's cancellation gate. Closing the channel
++	 * excludes this entire read/send operation before freeing its context. */
++	VCWClipboardDelivery *delivery = timer.userInfo;
++	[delivery performIfActive:^{
++		[self vcwReadPasteboard];
++		if ([delivery hasPendingPaste]) [self vcwAdvancePaste];
++	}];
++}
++
++- (void)vcwSetClipboardDelivery:(id)delivery
++{
++	[self->pasteboard_timer invalidate];
++	self->pasteboard_timer = nil;
++	[self->clipboard_delivery release];
++	self->clipboard_delivery = [delivery retain];
++	[self vcwResumeClipboard];
++}
++
++- (void)vcwClearClipboardDelivery:(id)delivery
++{
++	/* A queued close for the previous channel cannot cancel its successor. */
++	if (self->clipboard_delivery != delivery) return;
++	[self->pasteboard_timer invalidate];
++	self->pasteboard_timer = nil;
++	[self->clipboard_delivery release];
++	self->clipboard_delivery = nil;
++}
++
++- (void)vcwResumeClipboard
++{
++	[self->clipboard_delivery performIfActive:^{
++		if (!self.is_connected || self->pasteboard_timer) return;
++		self->pasteboard_timer = [NSTimer scheduledTimerWithTimeInterval:0.5
++		    target:self selector:@selector(onPasteboardTimerFired:)
++		    userInfo:self->clipboard_delivery repeats:YES];
++	}];
++}
++
++- (void)vcwReadPasteboard
++{
++	/* A timer also exists when clipboard redirection is disabled. Check the
++	 * immutable connection policy before touching the system pasteboard,
++	 * including its change count. Channel readiness alone is not consent. */
++	if (!is_connected || !mfc || !context || !context->settings ||
++	    !freerdp_settings_get_bool(context->settings, FreeRDP_RedirectClipboard) ||
++	    !mfc->clipboardSync || !mfc->cliprdr || !mfc->clipboard)
++		return;
++	/* Keep the advertised data stable until its response arrives. */
++	if (![(VCWClipboardDelivery *)mfc->clipboardDelivery canPublishAdvertisement])
++		return;
++
+ 	UINT32 formatId;
+ 	BOOL formatMatch;
+ 	int changeCount;
+@@ -722,17 +917,21 @@
+ 	const char *formatType;
+ 	NSPasteboardItem *item;
+ 	changeCount = (int)[pasteboard_rd changeCount];
++	[(VCWClipboardDelivery *)mfc->clipboardDelivery observeLocalVersion:changeCount];
++	/* Receiving text is not a new local copy. Only an explicit paste may
++	 * publish that version back to the guest for its acknowledgment. */
++	VCWClipboardDelivery *delivery = (VCWClipboardDelivery *)mfc->clipboardDelivery;
++	if ([delivery isRemoteVersion:changeCount] && ![delivery hasPendingPaste])
++		return;
+ 
+ 	if (changeCount == pasteboard_changecount)
+ 		return;
+ 
+-	pasteboard_changecount = changeCount;
+ 	NSArray *items = [pasteboard_rd pasteboardItems];
+-
+-	if ([items count] < 1)
+-		return;
+-
+-	item = [items objectAtIndex:0];
++	/* A new clipboard generation replaces all old formats, even when empty
++	 * or unsupported. Otherwise remote paste can retain the previous secret. */
++	ClipboardEmpty(mfc->clipboard);
++	item = [items firstObject];
+ 	/**
+ 	 * System-Declared Uniform Type Identifiers:
+ 	 * https://developer.apple.com/library/ios/documentation/Miscellaneous/Reference/UTIRef/Articles/System-DeclaredUniformTypeIdentifiers.html
+@@ -753,15 +952,15 @@
+ 			}
+ 
+ 			formatString = [[NSString alloc] initWithData:formatData encoding:NSUTF8StringEncoding];
++			if (!formatString)
++				break;
+ 
+ 			const char *data = [formatString cStringUsingEncoding:NSUTF8StringEncoding];
+ 			const size_t dataLen = [formatString lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+ 			formatId = ClipboardRegisterFormat(mfc->clipboard, "text/plain");
+-			ClipboardSetData(mfc->clipboard, formatId, data, dataLen + 1);
++			formatMatch = data && ClipboardSetData(mfc->clipboard, formatId, data, dataLen + 1);
+ 			[formatString release];
+ 
+-			formatMatch = TRUE;
+-
+ 			break;
+ 		}
+ 	}
+@@ -769,14 +968,16 @@
+ 	if (!formatMatch)
+ 		ClipboardEmpty(mfc->clipboard);
+ 
+-	if (mfc->clipboardSync)
+-		mac_cliprdr_send_client_format_list(mfc->cliprdr);
++	/* Do not consume the generation if the channel rejected the send. */
++	if (mac_cliprdr_send_client_format_list(mfc->cliprdr) >= 0)
++		pasteboard_changecount = changeCount;
+ }
+ 
+ - (void)pause
+ {
+ 	dispatch_async(dispatch_get_main_queue(), ^{
+ 		[self->pasteboard_timer invalidate];
++		self->pasteboard_timer = nil;
+ 	});
+ 	NSArray *trackingAreas = self.trackingAreas;
+ 
+@@ -798,12 +999,7 @@
+ 	freerdp_input_send_focus_in_event(instance->context->input, 0);
+ 
+ 	dispatch_async(dispatch_get_main_queue(), ^{
+-		self->pasteboard_timer =
+-		    [NSTimer scheduledTimerWithTimeInterval:0.5
+-		                                     target:self
+-		                                   selector:@selector(onPasteboardTimerFired:)
+-		                                   userInfo:nil
+-		                                    repeats:YES];
++		[self vcwResumeClipboard];
+ 
+ 		NSTrackingArea *trackingArea = [[NSTrackingArea alloc]
+ 		    initWithRect:[self visibleRect]
+--- a/client/Mac/MRDPView.h
++++ b/client/Mac/MRDPView.h
+@@ -35,6 +35,7 @@
+ 	NSMutableArray *cursors;
+ 	NSMutableArray *windows;
+ 	NSTimer *pasteboard_timer;
++	id clipboard_delivery;
+ 	NSCursor *currentCursor;
+ 	NSRect prevWinPosition;
+ 	freerdp *instance;
+@@ -44,6 +45,7 @@
+ 	int argc;
+ 	char **argv;
+ 	DWORD kbdModFlags;
++	BOOL vcw_blocked_edit_keys[256];
+ 	BOOL initialized;
+ 	NSPoint savedDragLocation;
+ 	BOOL firstCreateWindow;
+@@ -64,6 +66,11 @@
+ - (void)setScrollOffset:(int)xOffset y:(int)yOffset w:(int)width h:(int)height;
+ 
+ - (void)onPasteboardTimerFired:(NSTimer *)timer;
++- (void)vcwSetClipboardDelivery:(id)delivery;
++- (void)vcwClearClipboardDelivery:(id)delivery;
++- (void)vcwResumeClipboard;
++- (void)vcwReadPasteboard;
++- (void)vcwAdvancePaste;
+ - (void)pause;
+ - (void)resume;
+ - (void)releaseResources;

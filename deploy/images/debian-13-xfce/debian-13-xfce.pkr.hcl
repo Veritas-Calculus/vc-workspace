@@ -91,6 +91,30 @@ variable "agent_binary" {
   type = string
 }
 
+variable "pam_module" {
+  type = string
+}
+
+variable "native_pam_module" {
+  type = string
+}
+
+variable "xrdp_package" {
+  type = string
+  validation {
+    condition     = fileexists(var.xrdp_package)
+    error_message = "The reviewed Debian xrdp package must exist."
+  }
+}
+
+variable "xrdp_package_sha256" {
+  type = string
+  validation {
+    condition     = can(regex("^[0-9a-f]{64}$", var.xrdp_package_sha256))
+    error_message = "An independently supplied xrdp package SHA-256 is required."
+  }
+}
+
 variable "mirror_protocol" {
   type = string
 }
@@ -111,6 +135,26 @@ variable "security_mirror_url" {
   type = string
 }
 
+variable "http_bind_address" {
+  type    = string
+  default = ""
+}
+
+variable "http_interface" {
+  type    = string
+  default = ""
+}
+
+variable "http_port_min" {
+  type    = number
+  default = 8840
+}
+
+variable "http_port_max" {
+  type    = number
+  default = 8847
+}
+
 source "proxmox-iso" "debian13_xfce" {
   proxmox_url              = var.pve_url
   username                 = var.pve_username
@@ -122,7 +166,7 @@ source "proxmox-iso" "debian13_xfce" {
   vm_name                  = var.template_name
   template_name            = var.template_name
   template_description     = "VC Workspace Debian 13 XFCE, xrdp, QEMU Guest Agent and VC Workspace Agent"
-  tags                     = "vc-vdi;template;debian-13;rdp"
+  tags                     = "vc-workspace;template;debian-13;rdp"
   task_timeout             = "45m"
 
   boot_iso {
@@ -137,7 +181,7 @@ source "proxmox-iso" "debian13_xfce" {
     "<esc><wait>",
     "auto url=http://{{ .HTTPIP }}:{{ .HTTPPort }}/preseed.cfg ",
     "debian-installer=en_US.UTF-8 locale=en_US.UTF-8 keyboard-configuration/xkb-keymap=us ",
-    "hostname=vc-vdi-debian-13-xfce domain=local netcfg/choose_interface=auto ",
+    "hostname=vc-workspace-debian-13-xfce domain=local netcfg/choose_interface=auto ",
     "fb=false debconf/frontend=noninteractive initrd=/install.amd/initrd.gz --- <enter>"
   ]
   http_content = {
@@ -148,6 +192,11 @@ source "proxmox-iso" "debian13_xfce" {
       mirror_directory = var.mirror_directory
     })
   }
+  http_bind_address     = var.http_bind_address
+  http_interface        = var.http_interface
+  http_network_protocol = "tcp4"
+  http_port_min         = var.http_port_min
+  http_port_max         = var.http_port_max
 
   bios                    = var.firmware
   cores                   = var.cores
@@ -185,15 +234,66 @@ build {
 
   provisioner "file" {
     source      = var.agent_binary
-    destination = "/tmp/vc-vdi-guest-agent"
+    destination = "/tmp/vc-workspace-guest-agent"
+  }
+
+  provisioner "file" {
+    source      = var.pam_module
+    destination = "/tmp/pam_vcworkspace.so"
+  }
+
+  provisioner "file" {
+    source      = var.native_pam_module
+    destination = "/tmp/pam_vcworkspace_native.so"
+  }
+
+  provisioner "file" {
+    source      = var.xrdp_package
+    destination = "/tmp/vc-workspace-xrdp.deb"
+  }
+
+  provisioner "file" {
+    source      = abspath("${path.root}/xrdp/install-package.py")
+    destination = "/tmp/vc-workspace-install-xrdp.py"
+  }
+
+  provisioner "file" {
+    source      = abspath("${path.root}/../../../assets/brand/vc-workspace-desktop-background.png")
+    destination = "/tmp/vc-workspace-desktop-background.png"
+  }
+
+  provisioner "file" {
+    source      = abspath("${path.root}/../../../internal/guestdesktop/session_layout.py")
+    destination = "/tmp/vc-workspace-session-layout.py"
+  }
+
+  provisioner "file" {
+    source      = abspath("${path.root}/../../guest/linux/vc-workspace-agent.service")
+    destination = "/tmp/vc-workspace-agent.service"
+  }
+
+  provisioner "file" {
+    source      = abspath("${path.root}/../../guest/linux/vc-workspace-accounts.service")
+    destination = "/tmp/vc-workspace-accounts.service"
+  }
+
+  provisioner "file" {
+    source      = abspath("${path.root}/../../guest/linux/vc-workspace-accounts.timer")
+    destination = "/tmp/vc-workspace-accounts.timer"
+  }
+
+  provisioner "file" {
+    source      = abspath("${path.root}/../../guest/linux/install-login-fence.py")
+    destination = "/tmp/vc-workspace-install-login-fence.py"
   }
 
   provisioner "shell" {
     script          = abspath("${path.root}/configure-desktop.sh")
     execute_command = "{{ .Vars }} sudo -E bash '{{ .Path }}'"
     environment_vars = [
-      "VC_VDI_MIRROR_URL=${var.mirror_url}",
-      "VC_VDI_SECURITY_MIRROR_URL=${var.security_mirror_url}"
+      "VC_WORKSPACE_MIRROR_URL=${var.mirror_url}",
+      "VC_WORKSPACE_SECURITY_MIRROR_URL=${var.security_mirror_url}",
+      "VC_WORKSPACE_XRDP_PACKAGE_SHA256=${var.xrdp_package_sha256}"
     ]
   }
 }

@@ -1,0 +1,22 @@
+[Unit]
+Description=VC Workspace Guest readiness
+After=network-online.target xrdp.service
+Wants=network-online.target
+Requires=vc-workspace-accounts.timer
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/vc-workspace-guest-agent --readiness-only --state-dir /var/lib/vc-workspace
+Restart=always
+RestartSec=3
+TimeoutStopSec=5
+KillMode=control-group
+UMask=0022
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/vc-workspace
+
+[Install]
+WantedBy=multi-user.target

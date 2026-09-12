@@ -2,15 +2,17 @@
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-rendered="$(mktemp "${TMPDIR:-/tmp}/vc-workspace-kubernetes.XXXXXX.yaml")"
-trap 'rm -f "${rendered}"' EXIT
 
 if ! command -v kubectl >/dev/null 2>&1; then
   echo "kubectl is required to verify Kubernetes manifests" >&2
   exit 1
 fi
 
-kubectl kustomize "${repo_dir}/deploy/kubernetes/base" >"${rendered}"
-kubectl create --dry-run=client --validate=false -f "${rendered}" >/dev/null
-kubectl create --dry-run=client --validate=false -f "${repo_dir}/deploy/kubernetes/secret.example.yaml" >/dev/null
-echo "Verified Kubernetes base and secret template"
+# kubectl create --dry-run=client still performs API discovery, including for
+# cert-manager CRDs. Do not contact the user's current (possibly unrelated)
+# cluster in an offline check. Structural checks run on rendered YAML instead.
+kubectl kustomize "${repo_dir}/deploy/kubernetes/base" >/dev/null
+kubectl kustomize "${repo_dir}/deploy/kubernetes/overlays/infra" >/dev/null
+cd "${repo_dir}"
+node --test deploy/kubernetes/infra-bootstrap.test.mjs deploy/kubernetes/infra-certificates.test.mjs
+echo "Verified Kubernetes rendering and structural/security boundaries offline; server schema/rollout checks remain separate"

@@ -1,0 +1,176 @@
+--- a/client/Mac/MRDPView.m
++++ b/client/Mac/MRDPView.m
+@@ -498,6 +499,19 @@
+ 
+ 	updateFlagStates(input, modFlags, kbdModFlags);
+ 	kbdModFlags = modFlags;
++}
++
++- (BOOL)vcwIsBlockedEditEvent:(NSEvent *)event
++{
++	const NSEventModifierFlags shortcuts = NSEventModifierFlagCommand | NSEventModifierFlagControl |
++	    NSEventModifierFlagOption | NSEventModifierFlagShift;
++	if ((event.modifierFlags & shortcuts) != NSEventModifierFlagCommand) return NO;
++	NSString *key = event.charactersIgnoringModifiers.lowercaseString;
++	SEL action = NULL;
++	if ([key isEqualToString:@"c"]) action = @selector(copy:);
++	else if ([key isEqualToString:@"x"]) action = @selector(cut:);
++	else if ([key isEqualToString:@"v"]) action = @selector(paste:);
++	return action && ![self vcwCanPerformEdit:action];
+ }
+ 
+ - (void)keyDown:(NSEvent *)event
+@@ -512,6 +526,16 @@
+ 	if (!is_connected)
+ 		return;
+ 
++	/* Disabled AppKit menu equivalents can reach keyDown. Consume the pair
++	 * instead of forwarding a literal letter to the guest. */
++	const unsigned short physicalKey = event.keyCode;
++	if (physicalKey < 256) vcw_blocked_edit_keys[physicalKey] = NO;
++	if ([self vcwIsBlockedEditEvent:event])
++	{
++		if (physicalKey < 256) vcw_blocked_edit_keys[physicalKey] = YES;
++		return;
++	}
++
+ 	[self flagsChanged:event];
+ 
+ 	keyFlags = KBD_FLAGS_DOWN;
+@@ -549,7 +573,15 @@
+ 	NSString *characters;
+ 
+ 	if (!is_connected)
++		return;
++
++	const unsigned short physicalKey = event.keyCode;
++	if (physicalKey < 256 && vcw_blocked_edit_keys[physicalKey])
++	{
++		vcw_blocked_edit_keys[physicalKey] = NO;
++		[self flagsChanged:event];
+ 		return;
++	}
+ 
+ 	[self flagsChanged:event];
+ 
+@@ -684,8 +716,120 @@
+ 		return;
+ 
+ 	free(pixel_data);
++}
++
++- (BOOL)vcwCanPerformEdit:(SEL)action
++{
++	if (!is_connected || !instance || !instance->context || !instance->context->input)
++		return NO;
++	if (action == @selector(selectAll:)) return YES;
++	if (action == @selector(paste:) && (!mfc || !mfc->clipboard || !context || !context->settings)) return NO;
++	if (action != @selector(copy:) && action != @selector(cut:) && action != @selector(paste:)) return NO;
++	return mfc && mfc->clipboardSync && mfc->cliprdr && instance->context->settings &&
++	       freerdp_settings_get_bool(instance->context->settings, FreeRDP_RedirectClipboard);
++}
++
++- (BOOL)validateUserInterfaceItem:(id<NSValidatedUserInterfaceItem>)item
++{
++	return [self vcwCanPerformEdit:item.action];
++}
++
++- (void)vcwSendEditKey:(UINT32)key action:(SEL)action
++{
++	if (![self vcwCanPerformEdit:action]) return;
++	rdpInput *input = instance->context->input;
++	/* A menu shortcut may arrive after Command was already forwarded as Win.
++	 * Release held modifiers before the guest shortcut, without toggling Caps
++	 * Lock/Num Lock. The next physical event resynchronizes held modifiers. */
++	const DWORD modifiers[] = { NSEventModifierFlagShift, NSEventModifierFlagControl,
++	                            NSEventModifierFlagOption, NSEventModifierFlagCommand };
++	BOOL ready = YES;
++	for (size_t i = 0; i < ARRAYSIZE(modifiers); i++)
++	{
++		const DWORD flag = modifiers[i];
++		if (updateFlagState(input, kbdModFlags & ~flag, kbdModFlags, flag))
++			kbdModFlags &= ~flag;
++		else ready = NO;
++	}
++	if (!ready) return;
++	BOOL sent = freerdp_input_send_keyboard_event_ex(input, TRUE, FALSE, RDP_SCANCODE_LCONTROL);
++	if (sent)
++	{
++		(void)freerdp_input_send_keyboard_event_ex(input, TRUE, FALSE, key);
++		(void)freerdp_input_send_keyboard_event_ex(input, FALSE, FALSE, key);
++	}
++	/* Always attempt release, including a failed press/write. */
++	(void)freerdp_input_send_keyboard_event_ex(input, FALSE, FALSE, RDP_SCANCODE_LCONTROL);
++}
++
++- (void)copy:(id)sender
++{
++	(void)sender;
++	[self vcwSendEditKey:RDP_SCANCODE_KEY_C action:_cmd];
++}
++
++- (void)cut:(id)sender
++{
++	(void)sender;
++	[self vcwSendEditKey:RDP_SCANCODE_KEY_X action:_cmd];
++}
++
++- (void)selectAll:(id)sender
++{
++	(void)sender;
++	[self vcwSendEditKey:RDP_SCANCODE_KEY_A action:_cmd];
++}
++
++- (void)paste:(id)sender
++{
++	(void)sender;
++	VCWClipboardDelivery *delivery = self->clipboard_delivery;
++	[delivery performIfActive:^{
++		if (![self vcwCanPerformEdit:@selector(paste:)])
++		{ WLog_WARN(TAG, "VCW paste rejected: channel or policy unavailable"); return; }
++		if (![self vcwHasPasteFocus])
++		{ WLog_WARN(TAG, "VCW paste rejected: desktop does not own active focus"); return; }
++		if (![delivery beginPasteVersion:[pasteboard_rd changeCount]
++		                         atTime:NSProcessInfo.processInfo.systemUptime]) return;
++		[self vcwAdvancePaste];
++	}];
++}
++
++- (void)vcwPasteRejected
++{
++	NSBeep();
++}
++
++- (BOOL)vcwHasPasteFocus
++{
++	return self.window.isKeyWindow && self.window.firstResponder == self && NSApp.isActive;
+ }
+ 
++- (void)vcwAdvancePaste
++{
++	VCWClipboardDelivery *delivery = self->clipboard_delivery;
++	[delivery performIfActive:^{
++		if (![delivery hasPendingPaste]) return;
++		if (![self vcwCanPerformEdit:@selector(paste:)] || ![self vcwHasPasteFocus])
++		{ WLog_WARN(TAG, "VCW paste cancelled: readiness or focus changed"); [delivery cancelPaste]; return; }
++		[self vcwReadPasteboard];
++		const VCWPasteDecision decision = [delivery takePasteForVersion:[pasteboard_rd changeCount]
++		    published:pasteboard_changecount atTime:NSProcessInfo.processInfo.systemUptime];
++		if (decision == VCWPasteRejected)
++		{ WLog_WARN(TAG, "VCW paste cancelled: version changed, confirmation rejected or timed out"); [self vcwPasteRejected]; return; }
++		if (decision != VCWPasteReady) return;
++		/* Empty/unsupported snapshots must never invoke a paste against old
++		 * guest contents. This is the exact confirmed outbound buffer. */
++		const UINT32 format = ClipboardGetFormatId(mfc->clipboard, "text/plain");
++		UINT32 size = 0;
++		void *data = format ? ClipboardGetData(mfc->clipboard, format, &size) : NULL;
++		const BOOL hasText = data && size > 1;
++		free(data);
++		if (hasText) [self vcwSendEditKey:RDP_SCANCODE_KEY_V action:@selector(paste:)];
++		else WLog_WARN(TAG, "VCW paste rejected: confirmed snapshot has no supported text");
++	}];
++}
++
+ - (void)drawRect:(NSRect)rect
+ {
+ 	if (!context)

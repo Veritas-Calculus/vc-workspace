@@ -2,6 +2,7 @@ package pve
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,6 +40,15 @@ type Client struct {
 	ticket   string
 	csrf     string
 	ticketAt time.Time
+}
+
+// Principal identifies the immutable credentials configured for this client.
+// It never returns a password, token secret or session ticket.
+func (c *Client) Principal() string {
+	if c.tokenID != "" {
+		return c.tokenID
+	}
+	return c.username
 }
 
 type Summary struct {
@@ -89,6 +99,10 @@ type VM struct {
 // version, so callers should use this type instead of decoding the API payload
 // directly.
 type VMConfiguration struct {
+	Digest          string            `json:"-"`
+	Description     string            `json:"-"`
+	Lock            string            `json:"-"`
+	Template        bool              `json:"-"`
 	Name            string            `json:"name"`
 	OSType          string            `json:"os_type"`
 	BIOS            string            `json:"bios"`
@@ -103,6 +117,7 @@ type VMConfiguration struct {
 	Disks           map[string]string `json:"disks"`
 	NetworkAdapters map[string]string `json:"network_adapters"`
 	PCIHostDevices  map[string]string `json:"pci_host_devices"`
+	IPConfigs       map[string]string `json:"-"`
 }
 
 type Storage struct {
@@ -254,6 +269,11 @@ func (c *Client) Summary(ctx context.Context) (Summary, error) {
 	result := Summary{
 		Version:  Version{Version: versionResponse.Data.Version, Release: versionResponse.Data.Release},
 		Writable: c.mutationsEnabled,
+		// A scoped account may legitimately see no resources. Keep the public
+		// collection contract as [] rather than encoding nil slices as null.
+		Nodes:   make([]Node, 0, len(nodesResponse.Data)),
+		VMs:     make([]VM, 0, len(vmResponse.Data)),
+		Storage: make([]Storage, 0, len(storageResponse.Data)),
 	}
 	for _, item := range clusterResponse.Data {
 		if item.Type == "cluster" {
@@ -313,6 +333,10 @@ func (c *Client) VMConfiguration(ctx context.Context, node string, vmid int) (VM
 	}
 	value := func(key string) string { return rawScalarString(response.Data[key]) }
 	configuration := VMConfiguration{
+		Digest:          value("digest"),
+		Description:     value("description"),
+		Lock:            value("lock"),
+		Template:        value("template") == "1",
 		Name:            value("name"),
 		OSType:          value("ostype"),
 		BIOS:            value("bios"),
@@ -323,6 +347,7 @@ func (c *Client) VMConfiguration(ctx context.Context, node string, vmid int) (VM
 		Disks:           map[string]string{},
 		NetworkAdapters: map[string]string{},
 		PCIHostDevices:  map[string]string{},
+		IPConfigs:       map[string]string{},
 	}
 	configuration.Cores, _ = strconv.Atoi(value("cores"))
 	configuration.MemoryMB, _ = strconv.Atoi(value("memory"))
@@ -332,6 +357,7 @@ func (c *Client) VMConfiguration(ctx context.Context, node string, vmid int) (VM
 	diskPattern := regexp.MustCompile(`^(ide|sata|scsi|virtio)\d+$`)
 	networkPattern := regexp.MustCompile(`^net\d+$`)
 	pciPattern := regexp.MustCompile(`^hostpci\d+$`)
+	ipPattern := regexp.MustCompile(`^ipconfig\d+$`)
 	for key := range response.Data {
 		switch {
 		case diskPattern.MatchString(key):
@@ -340,6 +366,8 @@ func (c *Client) VMConfiguration(ctx context.Context, node string, vmid int) (VM
 			configuration.NetworkAdapters[key] = value(key)
 		case pciPattern.MatchString(key):
 			configuration.PCIHostDevices[key] = value(key)
+		case ipPattern.MatchString(key):
+			configuration.IPConfigs[key] = value(key)
 		}
 	}
 	return configuration, nil
@@ -369,13 +397,14 @@ func splitPVETags(value string) []string {
 }
 
 type CloneRequest struct {
-	SourceNode string
-	SourceVMID int
-	TargetVMID int
-	Name       string
-	TargetNode string
-	Storage    string
-	Full       bool
+	Description string
+	SourceNode  string
+	SourceVMID  int
+	TargetVMID  int
+	Name        string
+	TargetNode  string
+	Storage     string
+	Full        bool
 }
 
 type TaskStatus struct {
@@ -394,6 +423,9 @@ func (c *Client) CloneTemplate(ctx context.Context, request CloneRequest) (strin
 	}
 	if request.Full {
 		form.Set("full", "1")
+	}
+	if request.Description != "" {
+		form.Set("description", request.Description)
 	}
 	if request.TargetNode != "" {
 		form.Set("target", request.TargetNode)
@@ -424,27 +456,29 @@ func (c *Client) TaskStatus(ctx context.Context, node, upid string) (TaskStatus,
 	return TaskStatus{Status: response.Data.Status, ExitStatus: response.Data.ExitStatus}, nil
 }
 
-func (c *Client) ConfigureVMPCIResourceMapping(ctx context.Context, node string, vmid int, mapping string) error {
+func (c *Client) ConfigureVMPCIResourceMapping(ctx context.Context, node string, vmid int, mapping, digest string) error {
 	mapping = strings.TrimSpace(mapping)
-	if node == "" || vmid <= 0 || !regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`).MatchString(mapping) {
+	if node == "" || vmid <= 0 || !regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`).MatchString(mapping) || !ValidConfigurationDigest(digest) {
 		return errors.New("PCI resource mapping request is invalid")
 	}
 	form := url.Values{
 		"hostpci0": {"mapping=" + mapping + ",pcie=1,x-vga=1"},
+		"digest":   {digest},
 	}
 	var response envelope[any]
 	path := fmt.Sprintf("/nodes/%s/qemu/%d/config", url.PathEscape(node), vmid)
 	return c.do(ctx, http.MethodPut, path, form, &response)
 }
 
-func (c *Client) ConfigureVMMDevResourceMapping(ctx context.Context, node string, vmid int, mapping, mdevType string) error {
+func (c *Client) ConfigureVMMDevResourceMapping(ctx context.Context, node string, vmid int, mapping, mdevType, digest string) error {
 	mapping = strings.TrimSpace(mapping)
 	mdevType = strings.TrimSpace(mdevType)
-	if node == "" || vmid <= 0 || !regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`).MatchString(mapping) || !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`).MatchString(mdevType) {
+	if node == "" || vmid <= 0 || !regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`).MatchString(mapping) || !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`).MatchString(mdevType) || !ValidConfigurationDigest(digest) {
 		return errors.New("mediated PCI resource mapping request is invalid")
 	}
 	form := url.Values{
 		"hostpci0": {"mapping=" + mapping + ",mdev=" + mdevType},
+		"digest":   {digest},
 	}
 	var response envelope[any]
 	path := fmt.Sprintf("/nodes/%s/qemu/%d/config", url.PathEscape(node), vmid)
@@ -535,6 +569,27 @@ func (c *Client) ChangePowerState(ctx context.Context, node string, vmid int, ac
 	return response.Data, nil
 }
 
+// VMPowerState reads the owning node directly. Cluster resource inventory may
+// briefly retain the previous power state after a completed shutdown/start job.
+// Unknown or incomplete responses cannot authorize another power operation.
+func (c *Client) VMPowerState(ctx context.Context, node string, vmid int) (string, error) {
+	if node == "" || vmid <= 0 {
+		return "", errors.New("VM power observation is invalid")
+	}
+	var response envelope[struct {
+		VMID   int    `json:"vmid"`
+		Status string `json:"status"`
+	}]
+	path := fmt.Sprintf("/nodes/%s/qemu/%d/status/current", url.PathEscape(node), vmid)
+	if err := c.get(ctx, path, &response); err != nil {
+		return "", err
+	}
+	if response.Data.VMID != vmid || (response.Data.Status != "running" && response.Data.Status != "stopped") {
+		return "", errors.New("VM power observation is incomplete or mismatched")
+	}
+	return response.Data.Status, nil
+}
+
 func (c *Client) GuestNetworkInterfaces(ctx context.Context, node string, vmid int) ([]GuestNetworkInterface, error) {
 	if node == "" || vmid <= 0 {
 		return nil, errors.New("guest network request is invalid")
@@ -586,6 +641,48 @@ func (c *Client) ReadGuestFile(ctx context.Context, node string, vmid int, filen
 	return response.Data.Content, nil
 }
 
+// WriteGuestFile stages a small control payload through QEMU Guest Agent.
+// PVE applies a 60 KiB request limit and encodes the content for QGA when
+// encode=1. Callers must use a fixed, validated path because this method runs
+// with the guest agent's root/SYSTEM authority.
+func (c *Client) WriteGuestFile(ctx context.Context, node string, vmid int, filename, content string) error {
+	if node == "" || vmid <= 0 || filename == "" || len(content) == 0 || len(content) > 60*1024 {
+		return errors.New("guest file write request is invalid")
+	}
+	form := url.Values{
+		"file":    {filename},
+		"content": {content},
+		"encode":  {"1"},
+	}
+	var response envelope[any]
+	path := fmt.Sprintf("/nodes/%s/qemu/%d/agent/file-write", url.PathEscape(node), vmid)
+	if err := c.do(ctx, http.MethodPost, path, form, &response); err != nil {
+		return err
+	}
+	return nil
+}
+
+// WriteGuestBinaryFile stages one binary chunk through QGA. The PVE API only
+// accepts UTF-8 form values, so binary data must be base64-encoded by the caller
+// and sent with encode=0. The encoded value must remain within PVE's 60 KiB
+// content limit.
+func (c *Client) WriteGuestBinaryFile(ctx context.Context, node string, vmid int, filename string, content []byte) error {
+	if node == "" || vmid <= 0 || filename == "" || len(content) == 0 || len(content) > 45*1024 {
+		return errors.New("guest binary file write request is invalid")
+	}
+	form := url.Values{
+		"file":    {filename},
+		"content": {base64.StdEncoding.EncodeToString(content)},
+		"encode":  {"0"},
+	}
+	var response envelope[any]
+	path := fmt.Sprintf("/nodes/%s/qemu/%d/agent/file-write", url.PathEscape(node), vmid)
+	if err := c.do(ctx, http.MethodPost, path, form, &response); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (c *Client) SetGuestUserPassword(ctx context.Context, node string, vmid int, username, password string) error {
 	if node == "" || vmid <= 0 || username == "" || len(password) < 5 {
 		return errors.New("guest password request is invalid")
@@ -609,6 +706,20 @@ func (c *Client) SetGuestUserPassword(ctx context.Context, node string, vmid int
 // fragments; this is the privileged enforcement channel used by control-plane
 // policies.
 func (c *Client) ExecGuest(ctx context.Context, node string, vmid int, command []string) (GuestExecResult, error) {
+	return c.execGuest(ctx, node, vmid, command, nil)
+}
+
+// ExecGuestWithInput sends short-lived enrollment material over QGA stdin so
+// directory passwords never appear in the guest process argv or persisted
+// identity profile. Callers must still avoid logging the input bytes.
+func (c *Client) ExecGuestWithInput(ctx context.Context, node string, vmid int, command []string, input []byte) (GuestExecResult, error) {
+	if len(input) == 0 || len(input) > 64*1024 {
+		return GuestExecResult{}, errors.New("guest command input is invalid")
+	}
+	return c.execGuest(ctx, node, vmid, command, input)
+}
+
+func (c *Client) execGuest(ctx context.Context, node string, vmid int, command []string, input []byte) (GuestExecResult, error) {
 	if node == "" || vmid <= 0 || len(command) == 0 || len(command) > 64 {
 		return GuestExecResult{}, errors.New("guest command request is invalid")
 	}
@@ -618,6 +729,12 @@ func (c *Client) ExecGuest(ctx context.Context, node string, vmid int, command [
 		}
 	}
 	form := url.Values{"command": command}
+	if len(input) > 0 {
+		// PVE's agent/exec endpoint accepts raw stdin and performs the QGA
+		// base64 encoding itself. Encoding here would deliver base64 text to
+		// the guest instead of the intended enrollment material.
+		form.Set("input-data", string(input))
+	}
 	var started envelope[struct {
 		PID int `json:"pid"`
 	}]
@@ -634,10 +751,13 @@ func (c *Client) ExecGuest(ctx context.Context, node string, vmid int, command [
 	for {
 		statusPath := fmt.Sprintf("/nodes/%s/qemu/%d/agent/exec-status?pid=%d", url.PathEscape(node), vmid, started.Data.PID)
 		var status envelope[struct {
-			Exited   int    `json:"exited"`
-			ExitCode int    `json:"exitcode"`
-			Stdout   string `json:"out-data"`
-			Stderr   string `json:"err-data"`
+			Exited       json.RawMessage `json:"exited"`
+			ExitCode     *int64          `json:"exitcode"`
+			Signal       *int64          `json:"signal"`
+			Stdout       string          `json:"out-data"`
+			Stderr       string          `json:"err-data"`
+			OutTruncated json.RawMessage `json:"out-truncated"`
+			ErrTruncated json.RawMessage `json:"err-truncated"`
 		}]
 		if err := c.get(ctx, statusPath, &status); err != nil {
 			if !isTransientGuestExecStatusError(err) {
@@ -650,8 +770,25 @@ func (c *Client) ExecGuest(ctx context.Context, node string, vmid int, command [
 				continue
 			}
 		}
-		if status.Data.Exited == 1 {
-			return GuestExecResult{ExitCode: status.Data.ExitCode, Stdout: status.Data.Stdout, Stderr: status.Data.Stderr}, nil
+		exited, err := guestExecFlag(status.Data.Exited)
+		if err != nil || len(status.Data.Exited) == 0 {
+			return GuestExecResult{ExitCode: -1}, errors.New("guest agent returned invalid process state")
+		}
+		if exited {
+			// QGA omits exitcode after a signal / Windows exception. An absent
+			// code must NEVER become Go's zero value and acknowledge a mutation.
+			if status.Data.Signal != nil {
+				return GuestExecResult{ExitCode: -1}, fmt.Errorf("guest process terminated abnormally (signal/exception %d)", *status.Data.Signal)
+			}
+			if status.Data.ExitCode == nil || *status.Data.ExitCode < 0 || *status.Data.ExitCode > 0xffffffff {
+				return GuestExecResult{ExitCode: -1}, errors.New("guest agent returned no valid exit code")
+			}
+			outTruncated, outErr := guestExecFlag(status.Data.OutTruncated)
+			errTruncated, errErr := guestExecFlag(status.Data.ErrTruncated)
+			if outErr != nil || errErr != nil || outTruncated || errTruncated {
+				return GuestExecResult{ExitCode: -1}, errors.New("guest command output is truncated or has invalid capture metadata")
+			}
+			return GuestExecResult{ExitCode: int(*status.Data.ExitCode), Stdout: status.Data.Stdout, Stderr: status.Data.Stderr}, nil
 		}
 		select {
 		case <-ctx.Done():
@@ -661,9 +798,26 @@ func (c *Client) ExecGuest(ctx context.Context, node string, vmid int, command [
 	}
 }
 
+// PVE versions expose QGA booleans as either JSON booleans or integer 0/1.
+// Optional capture flags may be absent; null/string/other integers fail closed.
+func guestExecFlag(raw json.RawMessage) (bool, error) {
+	switch strings.TrimSpace(string(raw)) {
+	case "", "0", "false":
+		return false, nil
+	case "1", "true":
+		return true, nil
+	default:
+		return false, errors.New("invalid guest execution boolean")
+	}
+}
+
 func isTransientGuestExecStatusError(err error) bool {
 	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "guest-exec-status") && strings.Contains(message, "timeout")
+	// Only called while GET-polling an already acknowledged PID. A temporary
+	// QGA outage is not proof that the process failed. Never retry the POST:
+	// privileged commands may already have changed guest state.
+	return (strings.Contains(message, "guest-exec-status") && strings.Contains(message, "timeout")) ||
+		strings.Contains(message, "qemu guest agent is not running")
 }
 
 func (c *Client) GPUDevices(ctx context.Context, nodes []string) ([]GPUDevice, error) {

@@ -1,3 +1,5 @@
+import { clearSessionExpiry, expireWebSession } from './session-recovery'
+
 export type Infrastructure = {
   version: { version: string; release: string }
   cluster: { name: string; quorate: boolean; node_count: number }
@@ -37,11 +39,21 @@ export type SystemState = {
   oidc_configured: boolean
   oidc_name: string
   uptime_seconds: number
+  identity_capabilities: {
+    managed_local: boolean
+    linux_sssd: boolean
+    windows_ad: boolean
+    linux_sssd_oidc: boolean
+    windows_entra_rdp: boolean
+  }
 }
 
 export type DesktopAccessPolicy = {
   vmid: number
   privilege_mode: 'standard' | 'local_admin'
+  clipboard_redirection: boolean
+  drive_redirection: boolean
+  managed_background: boolean
   desired_revision: number
   applied_revision: number
   state: 'pending' | 'applied' | 'failed'
@@ -74,6 +86,7 @@ export type Session = {
     username: string
     display_name: string
     role: string
+    identity_kind: 'local' | 'oidc'
   }
   csrf_token: string
 }
@@ -88,12 +101,33 @@ export type UserAccount = {
   created_at: string
 }
 
+export type APIToken = {
+  id: string
+  name: string
+  expires_at: string
+  created_at: string
+  last_used_at?: string
+}
+
+export type APITokenCredential = {
+  api_token: APIToken
+  access_token: string
+}
+
 export type ManagedDesktop = {
   vmid: number
   display_name: string
   node: string
+  os_family: 'linux' | 'windows' | 'unknown'
   present: boolean
   enabled: boolean
+  access_mode: 'personal' | 'shared'
+  owner_user_id?: string
+  identity_profile_id?: string
+  identity_state: 'pending' | 'applied' | 'restart_required' | 'failed'
+  applied_identity_profile_id?: string
+  identity_last_error?: string
+  identity_updated_at: string
   first_seen_at: string
   last_seen_at: string
   updated_at: string
@@ -110,11 +144,69 @@ export type AgentPrincipal = {
 }
 
 export type DesktopAssignment = {
-  subject_type: 'user' | 'agent'
+  subject_type: 'user' | 'agent' | 'group'
   subject_id: string
   desktop_vmid: number
   created_by?: string
   created_at: string
+}
+
+export type IdentityGroup = {
+  id: string
+  provider_id?: string
+  external_id?: string
+  display_name: string
+  source: 'local' | 'oidc' | 'scim'
+  enabled: boolean
+  member_count: number
+  created_by?: string
+  created_at: string
+  updated_at: string
+}
+
+export type IdentityGroupMembership = {
+  group_id: string
+  user_id: string
+  source: 'local' | 'oidc' | 'scim'
+  created_at: string
+  updated_at: string
+}
+
+export type IdentityProfileMode = 'managed_local' | 'linux_sssd_ad' | 'linux_sssd_freeipa' | 'linux_sssd_ldap' | 'linux_sssd_oidc' | 'windows_ad' | 'windows_entra'
+
+export type IdentityProfile = {
+  id: string
+  display_name: string
+  platform: 'linux' | 'windows'
+  mode: IdentityProfileMode
+  enabled: boolean
+  experimental: boolean
+  config: Record<string, unknown>
+  created_by?: string
+  created_at: string
+  updated_at: string
+}
+
+export type GuestIdentityBinding = {
+  desktop_vmid: number
+  user_id: string
+  profile_id?: string
+  guest_username: string
+  state: 'provisioning' | 'ready' | 'failed' | 'disabled'
+  last_error?: string
+  created_at: string
+  updated_at: string
+}
+
+export type DesktopLease = {
+  id: string
+  agent_id: string
+  desktop_id: string
+  state: 'active' | 'released' | 'expired' | 'revoked'
+  control_epoch: number
+  expires_at: string
+  created_at: string
+  updated_at: string
 }
 
 export type AccessControl = {
@@ -122,6 +214,12 @@ export type AccessControl = {
   agents: AgentPrincipal[]
   desktops: ManagedDesktop[]
   assignments: DesktopAssignment[]
+  desktop_leases: DesktopLease[]
+  groups: IdentityGroup[]
+  group_memberships: IdentityGroupMembership[]
+  identity_profiles: IdentityProfile[]
+  guest_identity_bindings: GuestIdentityBinding[]
+  api_tokens: APIToken[]
 }
 
 export type AgentCredential = {
@@ -248,15 +346,17 @@ export type PlatformConfig = {
   image_builds: Job[]
 }
 
-type APIError = { error?: { message?: string } }
+type APIError = { error?: { code?: string; message?: string } }
+
+export class APIRequestError extends Error {
+  constructor(public readonly status: number, public readonly code: string, message: string) {
+    super(message)
+    this.name = 'APIRequestError'
+  }
+}
 
 export async function getInfrastructure(signal?: AbortSignal): Promise<Infrastructure> {
-  const response = await fetch('/api/v1/infrastructure', { signal })
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as APIError
-    throw new Error(body.error?.message ?? `Request failed with ${response.status}`)
-  }
-  return response.json() as Promise<Infrastructure>
+  return requestJSON<Infrastructure>('/api/v1/infrastructure', { signal })
 }
 
 export async function getSystem(signal?: AbortSignal): Promise<SystemState> {
@@ -271,6 +371,31 @@ export async function getMe(signal?: AbortSignal): Promise<Session | null> {
 
 export async function getAccessControl(signal?: AbortSignal): Promise<AccessControl> {
   return requestJSON<AccessControl>('/api/v1/access-control', { signal })
+}
+
+export async function changePassword(input: { current_password: string; new_password: string }, csrfToken: string): Promise<void> {
+  const response = await fetch('/api/v1/me/password', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify(input),
+  })
+  if (!response.ok) await parseResponse<never>(response)
+}
+
+export async function createAPIToken(input: { name: string; expires_in_days: number }, csrfToken: string): Promise<APITokenCredential> {
+  return requestJSON<APITokenCredential>('/api/v1/api-tokens', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify(input),
+  })
+}
+
+export async function revokeAPIToken(id: string, csrfToken: string): Promise<void> {
+  const response = await fetch(`/api/v1/api-tokens/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { 'X-CSRF-Token': csrfToken },
+  })
+  if (!response.ok) await parseResponse<never>(response)
 }
 
 export async function reconcileAccessControl(csrfToken: string): Promise<AccessControl> {
@@ -294,6 +419,15 @@ export async function updateUser(id: string, disabled: boolean, csrfToken: strin
     headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
     body: JSON.stringify({ disabled }),
   })
+}
+
+export async function resetUserPassword(id: string, newPassword: string, csrfToken: string): Promise<void> {
+  const response = await fetch(`/api/v1/users/${encodeURIComponent(id)}/password`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify({ new_password: newPassword }),
+  })
+  if (!response.ok) await parseResponse<never>(response)
 }
 
 export async function createAgentPrincipal(input: { id: string; display_name: string }, csrfToken: string): Promise<AgentCredential> {
@@ -327,12 +461,62 @@ export async function setDesktopAssignment(subjectType: DesktopAssignment['subje
   if (!response.ok) await parseResponse<never>(response)
 }
 
+export async function updateManagedDesktopIdentity(vmid: number, input: Pick<ManagedDesktop, 'access_mode'> & { owner_user_id?: string; identity_profile_id?: string }, csrfToken: string): Promise<ManagedDesktop> {
+  return requestJSON<ManagedDesktop>(`/api/v1/managed-desktops/${vmid}/identity`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify(input),
+  })
+}
+
+export async function reconcileManagedDesktopIdentity(vmid: number, input: { join_username?: string; join_password?: string; client_secret?: string }, csrfToken: string): Promise<ManagedDesktop> {
+  return requestJSON<ManagedDesktop>(`/api/v1/managed-desktops/${vmid}/identity/reconcile`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify(input),
+  })
+}
+
+export async function putIdentityProfile(id: string, input: Pick<IdentityProfile, 'display_name' | 'platform' | 'mode' | 'enabled' | 'experimental' | 'config'>, csrfToken: string): Promise<IdentityProfile> {
+  return requestJSON<IdentityProfile>(`/api/v1/identity-profiles/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify(input),
+  })
+}
+
+export async function createIdentityGroup(input: Pick<IdentityGroup, 'id' | 'display_name' | 'source' | 'enabled'>, csrfToken: string): Promise<IdentityGroup> {
+  return requestJSON<IdentityGroup>('/api/v1/identity-groups', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify(input),
+  })
+}
+
+export async function updateIdentityGroup(id: string, enabled: boolean, csrfToken: string): Promise<IdentityGroup> {
+  return requestJSON<IdentityGroup>(`/api/v1/identity-groups/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify({ enabled }),
+  })
+}
+
+export async function setIdentityGroupMembership(groupID: string, userID: string, member: boolean, csrfToken: string): Promise<void> {
+  const response = await fetch(`/api/v1/identity-groups/${encodeURIComponent(groupID)}/members/${encodeURIComponent(userID)}`, {
+    method: member ? 'PUT' : 'DELETE',
+    headers: { 'X-CSRF-Token': csrfToken },
+  })
+  if (!response.ok) await parseResponse<never>(response)
+}
+
 export async function createInitialAdmin(input: { setup_token: string; username: string; display_name: string; password: string }): Promise<Session> {
   return requestJSON<Session>('/api/v1/setup/admin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })
 }
 
 export async function login(input: { username: string; password: string }): Promise<Session> {
-  return requestJSON<Session>('/api/v1/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })
+  const session = await requestJSON<Session>('/api/v1/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })
+  clearSessionExpiry()
+  return session
 }
 
 export async function logout(csrfToken: string): Promise<void> {
@@ -359,16 +543,41 @@ export async function getDesktopAccessPolicy(vmid: number, signal?: AbortSignal)
   return requestJSON<DesktopAccessPolicy>(`/api/v1/virtual-machines/${vmid}/access-policy`, { signal })
 }
 
-export async function updateDesktopAccessPolicy(vmid: number, privilegeMode: DesktopAccessPolicy['privilege_mode'], csrfToken: string): Promise<DesktopAccessPolicy> {
+export async function updateDesktopAccessPolicy(vmid: number, policy: Pick<DesktopAccessPolicy, 'privilege_mode' | 'clipboard_redirection' | 'drive_redirection' | 'managed_background'>, csrfToken: string): Promise<DesktopAccessPolicy> {
   return requestJSON<DesktopAccessPolicy>(`/api/v1/virtual-machines/${vmid}/access-policy`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
-    body: JSON.stringify({ privilege_mode: privilegeMode }),
+    body: JSON.stringify(policy),
   })
 }
 
 export async function getJob(id: string, signal?: AbortSignal): Promise<Job> {
   return requestJSON<Job>(`/api/v1/jobs/${encodeURIComponent(id)}`, { signal })
+}
+
+export type CloneRecoveryEvidence = {
+  job_id: string
+  target_status: 'target_absent' | 'target_mismatch' | 'marker_matches' | 'target_locked'
+  candidates: Array<{
+    upid: string
+    start_time: number
+    status: 'running' | 'stopped'
+    exit_status?: string
+    log_target_status: 'matches' | 'mismatch' | 'unrecognized'
+  }>
+}
+
+export async function getCloneRecoveryEvidence(id: string, signal?: AbortSignal): Promise<CloneRecoveryEvidence> {
+  return requestJSON<CloneRecoveryEvidence>(`/api/v1/jobs/${encodeURIComponent(id)}/clone-candidates`, { signal, cache: 'no-store' })
+}
+
+// Never retry a mutation here. If its response is lost, read the original Job.
+export async function recoverClone(id: string, input: { upid: string; reason: string }, csrfToken: string, signal?: AbortSignal): Promise<Job> {
+  return requestJSON<Job>(`/api/v1/jobs/${encodeURIComponent(id)}/clone-recovery`, {
+    method: 'POST', signal, cache: 'no-store',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify(input),
+  })
 }
 
 export async function getJobs(limit = 50, signal?: AbortSignal): Promise<Job[]> {
@@ -430,13 +639,15 @@ export async function updatePCIResourceMapping(id: string, input: Omit<PCIResour
 }
 
 async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
-  return parseResponse<T>(await fetch(path, init))
+  const publicEndpoint = ['/api/v1/system', '/api/v1/auth/login', '/api/v1/setup/admin'].includes(path)
+  return parseResponse<T>(await fetch(path, init), !publicEndpoint)
 }
 
-async function parseResponse<T>(response: Response): Promise<T> {
+async function parseResponse<T>(response: Response, requiresSession = true): Promise<T> {
   if (!response.ok) {
+    if (response.status === 401 && requiresSession) expireWebSession()
     const body = (await response.json().catch(() => ({}))) as APIError
-    throw new Error(body.error?.message ?? `Request failed with ${response.status}`)
+    throw new APIRequestError(response.status, body.error?.code ?? 'request_failed', body.error?.message ?? `Request failed with ${response.status}`)
   }
   return response.json() as Promise<T>
 }

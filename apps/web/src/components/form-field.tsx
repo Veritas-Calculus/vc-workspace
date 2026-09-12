@@ -14,10 +14,11 @@ type FormFieldProps = {
   maxLength?: number
   hint?: string
   error?: string
+  disabled?: boolean
 }
 
 /** Replaces repeated label/input wiring so hints and errors cannot drift away from their control. */
-export function FormField({ label, value, onChange, type = 'text', autoComplete, required = true, min, max, pattern, minLength, maxLength, hint, error }: FormFieldProps) {
+export function FormField({ label, value, onChange, type = 'text', autoComplete, required = true, min, max, pattern, minLength, maxLength, hint, error, disabled = false }: FormFieldProps) {
   const id = useId()
   const hintID = `${id}-hint`
   const errorID = `${id}-error`
@@ -25,7 +26,7 @@ export function FormField({ label, value, onChange, type = 'text', autoComplete,
   return (
     <div className="form-field">
       <label htmlFor={id}>{label}</label>
-      <input id={id} type={type} value={value} onChange={(event) => onChange(event.target.value)} autoComplete={autoComplete} required={required} min={min} max={max} pattern={pattern} minLength={minLength} maxLength={maxLength} aria-invalid={error ? true : undefined} aria-describedby={describedBy} />
+      <input id={id} type={type} value={value} onChange={(event) => onChange(event.target.value)} autoComplete={autoComplete} required={required} min={min} max={max} pattern={pattern} minLength={minLength} maxLength={maxLength} disabled={disabled} aria-invalid={error ? true : undefined} aria-describedby={describedBy} />
       {hint && <p className="field-hint" id={hintID}>{hint}</p>}
       {error && <p className="field-error" id={errorID} role="alert">{error}</p>}
     </div>

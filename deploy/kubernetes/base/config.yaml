@@ -5,13 +5,16 @@ metadata:
   labels:
     app.kubernetes.io/part-of: vc-workspace
 data:
-  VC_VDI_HTTP_ADDR: 0.0.0.0:8080
-  VC_VDI_PUBLIC_URL: https://workspace.example.com
-  VC_VDI_NATIVE_CALLBACK_URL: vc-vdi://auth/callback
-  VC_VDI_PVE_ENDPOINT: https://pve.example.com:8006
-  VC_VDI_PVE_MUTATIONS_ENABLED: "false"
-  VC_VDI_IMAGE_BUILDER_ENABLED: "false"
-  VC_VDI_OIDC_NAME: Organization SSO
+  VC_WORKSPACE_HTTP_ADDR: 0.0.0.0:8080
+  VC_WORKSPACE_PUBLIC_URL: https://workspace.example.com
+  VC_WORKSPACE_NATIVE_CALLBACK_URL: vc-workspace://auth/callback
+  VC_WORKSPACE_PVE_ENDPOINT: https://pve.example.com:8006
+  VC_WORKSPACE_PVE_MUTATIONS_ENABLED: "false"
+  VC_WORKSPACE_IMAGE_BUILDER_ENABLED: "false"
+  VC_WORKSPACE_OIDC_NAME: Organization SSO
+  VC_WORKSPACE_OIDC_GROUPS_CLAIM: groups
+  VC_WORKSPACE_EXPERIMENTAL_SSSD_OIDC_ENABLED: "false"
+  VC_WORKSPACE_EXPERIMENTAL_WINDOWS_ENTRA_RDP_ENABLED: "false"
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -20,6 +23,6 @@ metadata:
   labels:
     app.kubernetes.io/part-of: vc-workspace
 data:
-  VC_VDI_API_URL: http://vc-workspace-control-plane:8080
-  VC_VDI_MCP_TRANSPORT: http
-  VC_VDI_MCP_HTTP_ADDR: 0.0.0.0:8090
+  VC_WORKSPACE_API_URL: http://vc-workspace-control-plane:8080
+  VC_WORKSPACE_MCP_TRANSPORT: http
+  VC_WORKSPACE_MCP_HTTP_ADDR: 0.0.0.0:8090

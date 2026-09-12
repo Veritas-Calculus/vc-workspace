@@ -1,7 +1,7 @@
 d-i debian-installer/locale string en_US.UTF-8
 d-i keyboard-configuration/xkb-keymap select us
 d-i netcfg/choose_interface select auto
-d-i netcfg/get_hostname string vc-vdi-debian-13-xfce
+d-i netcfg/get_hostname string vc-workspace-debian-13-xfce
 d-i netcfg/get_domain string local
 
 d-i mirror/country string manual

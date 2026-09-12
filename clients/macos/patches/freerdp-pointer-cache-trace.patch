@@ -1,0 +1,30 @@
+--- a/libfreerdp/cache/pointer.c
++++ b/libfreerdp/cache/pointer.c
+@@ -267,6 +267,9 @@
+ 	if (pointer != nullptr)
+ 		return IFCALLRESULT(TRUE, pointer->Set, context, pointer);
+ 
++	WLog_ERR(TAG, "VCW pointer cache op=%u index=%u capacity=%u", 2U,
++	         (unsigned)pointer_cached->cacheIndex, (unsigned)cache->pointer->cacheSize);
++
+ 	WLog_ERR(TAG, "cached pointer entry is absent");
+ 	return FALSE;
+ }
+@@ -324,6 +327,8 @@
+ 	rdpPointer* prevPointer = pointer_cache->entries[index];
+ 	pointer_free(pointer_cache->context, prevPointer);
+ 	pointer_cache->entries[index] = pointer;
++	WLog_INFO(TAG, "VCW pointer cache op=%u index=%u capacity=%u", 1U,
++	          (unsigned)index, (unsigned)pointer_cache->cacheSize);
+ 	return TRUE;
+ }
+ 
+@@ -387,6 +392,8 @@
+ 		return nullptr;
+ 	}
+ 
++	WLog_INFO(TAG, "VCW pointer cache op=%u index=%u capacity=%u", 0U, 0U,
++	          (unsigned)pointer_cache->cacheSize);
+ 	return pointer_cache;
+ }
+ 

@@ -1,0 +1,55 @@
+--- a/client/Mac/MRDPView.m
++++ b/client/Mac/MRDPView.m
+@@ -1472,14 +1472,19 @@
+ 	if (!context->gdi)
+ 		return TRUE;
+ 
+-	/**
+-	 * TODO: Fix resizing race condition. We should probably implement a message to be
+-	 * put on the update message queue to be able to properly flush pending updates,
+-	 * resize, and then continue with post-resizing graphical updates.
+-	 */
+-	CGContextRef old_context = view->bitmap_context;
+-	view->bitmap_context = nullptr;
+-	CGContextRelease(old_context);
++	/* Detach on the drawing thread before GDI replaces its buffer. Keep
++	 * gdi_resize on the protocol thread: it flushes EndPaint and releases
++	 * that thread's update lock; moving it to main would deadlock. */
++	void (^detachBitmap)(void) = ^{
++		CGContextRef old_context = view->bitmap_context;
++		view->bitmap_context = nullptr;
++		CGContextRelease(old_context);
++	};
++	if ([NSThread isMainThread])
++		detachBitmap();
++	else
++		dispatch_sync(dispatch_get_main_queue(), detachBitmap);
++
+ 	mfc->width = freerdp_settings_get_uint32(settings, FreeRDP_DesktopWidth);
+ 	mfc->height = freerdp_settings_get_uint32(settings, FreeRDP_DesktopHeight);
+ 
+@@ -1488,13 +1493,22 @@
+ 	if (!gdi_resize(context->gdi, mfc->width, mfc->height))
+ 		return FALSE;
+ 
+-	view->bitmap_context = mac_create_bitmap_context(context);
++	void (^publishBitmap)(void) = ^{
++		view->bitmap_context = mac_create_bitmap_context(context);
++		/* Embedded geometry belongs to the AppKit parent, in points.
++		 * Remote pixel dimensions must never resize the embedded view. */
++		if (mfc->view_ownership)
++			[view setFrameSize:NSMakeSize(mfc->width, mfc->height)];
++	};
++	if ([NSThread isMainThread])
++		publishBitmap();
++	else
++		dispatch_sync(dispatch_get_main_queue(), publishBitmap);
+ 
+ 	if (!view->bitmap_context)
+ 		return FALSE;
+ 
+ 	mfc->client_width = mfc->width;
+ 	mfc->client_height = mfc->height;
+-	[view setFrameSize:NSMakeSize(mfc->width, mfc->height)];
+ 	EventArgsInit(&e, "mfreerdp");
+ 	e.width = freerdp_settings_get_uint32(settings, FreeRDP_DesktopWidth);

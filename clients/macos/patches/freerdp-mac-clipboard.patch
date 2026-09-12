@@ -1,8 +1,147 @@
-diff --git a/client/Mac/Clipboard.m b/client/Mac/Clipboard.m
-index c336620..9fb7a55 100644
 --- a/client/Mac/Clipboard.m
 +++ b/client/Mac/Clipboard.m
-@@ -223,12 +223,12 @@ static UINT mac_cliprdr_server_format_list(CliprdrClientContext *cliprdr,
+@@ -20,8 +20,10 @@
+ 
+ #import "Clipboard.h"
+ #import "MRDPView.h"
++#define VCW_CLIPBOARD_DELIVERY_IMPLEMENTATION
++#import "VCWClipboardDelivery.h"
+ 
+-int mac_cliprdr_send_client_format_list(CliprdrClientContext *cliprdr)
++static int mac_cliprdr_send_client_format_list_active(CliprdrClientContext *cliprdr)
+ {
+ 	UINT32 formatId;
+ 	UINT32 numFormats;
+@@ -36,11 +38,22 @@
+ 
+ 	pFormatIds = nullptr;
+ 	numFormats = ClipboardGetFormatIds(mfc->clipboard, &pFormatIds);
++	/* WinPR represents an empty clipboard with internal format zero. It is
++	 * not an available wire format and must not keep remote paste enabled. */
++	UINT32 available = 0;
++	for (UINT32 index = 0; index < numFormats; index++)
++	{
++		if (pFormatIds[index] != 0)
++			pFormatIds[available++] = pFormatIds[index];
++	}
++	numFormats = available;
+ 
+-	formats = (CLIPRDR_FORMAT *)calloc(numFormats, sizeof(CLIPRDR_FORMAT));
+-
+-	if (!formats)
++	formats = numFormats ? (CLIPRDR_FORMAT *)calloc(numFormats, sizeof(CLIPRDR_FORMAT)) : nullptr;
++	if (numFormats && !formats)
++	{
++		free(pFormatIds);
+ 		return -1;
++	}
+ 
+ 	for (UINT32 index = 0; index < numFormats; index++)
+ 	{
+@@ -59,7 +72,15 @@
+ 	formatList.formats = formats;
+ 	formatList.common.msgType = CB_FORMAT_LIST;
+ 
+-	mfc->cliprdr->ClientFormatList(mfc->cliprdr, &formatList);
++	VCWClipboardDelivery *delivery = (VCWClipboardDelivery *)mfc->clipboardDelivery;
++	__block UINT result = ERROR_INTERNAL_ERROR;
++	[delivery performIfActive:^{
++		if ([delivery beginAdvertisement])
++		{
++			result = mfc->cliprdr->ClientFormatList(mfc->cliprdr, &formatList);
++			if (result != CHANNEL_RC_OK) [delivery advertisementSendFailed];
++		}
++	}];
+ 
+ 	for (UINT32 index = 0; index < numFormats; index++)
+ 	{
+@@ -69,9 +90,19 @@
+ 	free(pFormatIds);
+ 	free(formats);
+ 
+-	return 1;
++	return result == CHANNEL_RC_OK ? 1 : -1;
+ }
+ 
++int mac_cliprdr_send_client_format_list(CliprdrClientContext *cliprdr)
++{
++	if (!cliprdr || !cliprdr->custom) return -1;
++	mfContext *mfc = (mfContext *)cliprdr->custom;
++	VCWClipboardDelivery *delivery = (VCWClipboardDelivery *)mfc->clipboardDelivery;
++	__block int result = -1;
++	[delivery performIfActive:^{ result = mac_cliprdr_send_client_format_list_active(cliprdr); }];
++	return result;
++}
++
+ static int mac_cliprdr_send_client_format_list_response(CliprdrClientContext *cliprdr, BOOL status)
+ {
+ 	CLIPRDR_FORMAT_LIST_RESPONSE formatListResponse;
+@@ -80,9 +111,7 @@
+ 	formatListResponse.common.msgFlags = status ? CB_RESPONSE_OK : CB_RESPONSE_FAIL;
+ 	formatListResponse.common.dataLen = 0;
+ 
+-	cliprdr->ClientFormatListResponse(cliprdr, &formatListResponse);
+-
+-	return 1;
++	return cliprdr->ClientFormatListResponse(cliprdr, &formatListResponse);
+ }
+ 
+ static UINT mac_cliprdr_send_client_format_data_request(CliprdrClientContext *cliprdr,
+@@ -96,15 +125,23 @@
+ 
+ 	mfContext *mfc = (mfContext *)cliprdr->custom;
+ 	WINPR_ASSERT(mfc);
++	/* Data responses carry no request identifier. Drain the previous request
++	 * before requesting the newest offer, never overwrite its decode context. */
++	if (mfc->clipboardRequestPending) return CHANNEL_RC_OK;
+ 
+ 	formatDataRequest.common.msgType = CB_FORMAT_DATA_REQUEST;
+ 	formatDataRequest.common.msgFlags = 0;
+ 
+ 	formatDataRequest.requestedFormatId = formatId;
+ 	mfc->requestedFormatId = formatId;
++	mfc->requestedRemoteGeneration = [(VCWClipboardDelivery *)mfc->clipboardDelivery remoteGeneration];
++	mfc->requestedLocalGeneration = [(VCWClipboardDelivery *)mfc->clipboardDelivery localGeneration];
++	mfc->clipboardRequestPending = TRUE;
+ 	(void)ResetEvent(mfc->clipboardRequestEvent);
+ 
+-	return cliprdr->ClientFormatDataRequest(cliprdr, &formatDataRequest);
++	const UINT result = cliprdr->ClientFormatDataRequest(cliprdr, &formatDataRequest);
++	if (result != CHANNEL_RC_OK) mfc->clipboardRequestPending = FALSE;
++	return result;
+ }
+ 
+ static int mac_cliprdr_send_client_capabilities(CliprdrClientContext *cliprdr)
+@@ -184,6 +221,8 @@
+ 
+ 	mfContext *mfc = (mfContext *)cliprdr->custom;
+ 	WINPR_ASSERT(mfc);
++	[(VCWClipboardDelivery *)mfc->clipboardDelivery advanceRemoteGeneration];
++	mfc->latestRemoteFormat = 0;
+ 
+ 	if (mfc->serverFormats)
+ 	{
+@@ -198,7 +237,7 @@
+ 	}
+ 
+ 	if (formatList->numFormats < 1)
+-		return CHANNEL_RC_OK;
++		return mac_cliprdr_send_client_format_list_response(cliprdr, TRUE);
+ 
+ 	mfc->numServerFormats = formatList->numFormats;
+ 	mfc->serverFormats = (CLIPRDR_FORMAT *)calloc(mfc->numServerFormats, sizeof(CLIPRDR_FORMAT));
+@@ -215,7 +254,9 @@
+ 			mfc->serverFormats[index].formatName = _strdup(formatList->formats[index].formatName);
+ 	}
+ 
+-	mac_cliprdr_send_client_format_list_response(cliprdr, TRUE);
++	const UINT acknowledgment = mac_cliprdr_send_client_format_list_response(cliprdr, TRUE);
++	if (acknowledgment != CHANNEL_RC_OK)
++		return acknowledgment;
+ 
+ 	uint32_t formatId = 0;
+ 	for (UINT32 index = 0; index < mfc->numServerFormats; index++)
+@@ -227,15 +268,16 @@
  		else if (format->formatId == CF_OEMTEXT)
  		{
  			if (formatId == 0)
@@ -17,7 +156,149 @@ index c336620..9fb7a55 100644
  		}
  	}
  
-@@ -343,9 +343,14 @@ mac_cliprdr_server_format_data_response(CliprdrClientContext *cliprdr,
++	mfc->latestRemoteFormat = formatId;
+ 	return mac_cliprdr_send_client_format_data_request(cliprdr, formatId);
+ }
+ 
+@@ -248,6 +290,19 @@
+ mac_cliprdr_server_format_list_response(CliprdrClientContext *cliprdr,
+                                         const CLIPRDR_FORMAT_LIST_RESPONSE *formatListResponse)
+ {
++	if (!cliprdr || !cliprdr->custom || !formatListResponse)
++		return ERROR_INVALID_PARAMETER;
++	mfContext *mfc = (mfContext *)cliprdr->custom;
++	VCWClipboardDelivery *delivery = (VCWClipboardDelivery *)mfc->clipboardDelivery;
++	const BOOL accepted = formatListResponse->common.msgFlags == CB_RESPONSE_OK &&
++	    formatListResponse->common.dataLen == 0;
++	if ([delivery acknowledgeAdvertisement:accepted] && [delivery hasPendingPaste])
++	{
++		MRDPView *view = (MRDPView *)mfc->view;
++		dispatch_async(dispatch_get_main_queue(), ^{
++			[delivery performIfActive:^{ [view vcwAdvancePaste]; }];
++		});
++	}
+ 	return CHANNEL_RC_OK;
+ }
+ 
+@@ -284,8 +339,8 @@
+ mac_cliprdr_server_format_data_request(CliprdrClientContext *cliprdr,
+                                        const CLIPRDR_FORMAT_DATA_REQUEST *formatDataRequest)
+ {
+-	BYTE *data;
+-	UINT32 size;
++	__block BYTE *data = nullptr;
++	__block UINT32 size = 0;
+ 	UINT32 formatId;
+ 	CLIPRDR_FORMAT_DATA_RESPONSE response = WINPR_C_ARRAY_INIT;
+ 
+@@ -295,7 +350,14 @@
+ 	WINPR_ASSERT(mfc);
+ 
+ 	formatId = formatDataRequest->requestedFormatId;
+-	data = (BYTE *)ClipboardGetData(mfc->clipboard, formatId, &size);
++	size = 0;
++	VCWClipboardDelivery *delivery = (VCWClipboardDelivery *)mfc->clipboardDelivery;
++	/* MS-RDPECLIP 3.1.5.4.3 requires an empty failure after a rejected list.
++	 * Also fail closed before acknowledgment, never serving unconfirmed data. */
++	[delivery performIfActive:^{
++		if ([delivery formatsAccepted])
++			data = (BYTE *)ClipboardGetData(mfc->clipboard, formatId, &size);
++	}];
+ 
+ 	response.common.msgFlags = CB_RESPONSE_OK;
+ 	response.common.dataLen = size;
+@@ -308,11 +370,11 @@
+ 		response.requestedFormatData = nullptr;
+ 	}
+ 
+-	cliprdr->ClientFormatDataResponse(cliprdr, &response);
++	const UINT result = cliprdr->ClientFormatDataResponse(cliprdr, &response);
+ 
+ 	free(data);
+ 
+-	return CHANNEL_RC_OK;
++	return result;
+ }
+ 
+ /**
+@@ -325,45 +387,59 @@
+                                         const CLIPRDR_FORMAT_DATA_RESPONSE *formatDataResponse)
+ {
+ 	UINT32 formatId;
+-	CLIPRDR_FORMAT *format = nullptr;
+ 	mfContext *mfc = (mfContext *)cliprdr->custom;
+ 	MRDPView *view = (MRDPView *)mfc->view;
++	VCWClipboardDelivery *delivery = (VCWClipboardDelivery *)mfc->clipboardDelivery;
++	if (!mfc->clipboardRequestPending) return CHANNEL_RC_OK;
++	const BOOL failed = formatDataResponse->common.msgFlags == CB_RESPONSE_FAIL &&
++	    formatDataResponse->common.dataLen == 0;
+ 
+-	if (formatDataResponse->common.msgFlags & CB_RESPONSE_FAIL)
++	if ((!failed && formatDataResponse->common.msgFlags != CB_RESPONSE_OK) ||
++	    (formatDataResponse->common.dataLen && !formatDataResponse->requestedFormatData))
+ 	{
+ 		(void)SetEvent(mfc->clipboardRequestEvent);
+ 		return ERROR_INTERNAL_ERROR;
+ 	}
+ 
+-	for (UINT32 index = 0; index < mfc->numServerFormats; index++)
++	const NSUInteger generation = mfc->requestedRemoteGeneration;
++	const NSUInteger localGeneration = mfc->requestedLocalGeneration;
++	formatId = mfc->requestedFormatId;
++	mfc->clipboardRequestPending = FALSE;
++	(void)SetEvent(mfc->clipboardRequestEvent);
++	if (generation != [delivery remoteGeneration])
++		return mac_cliprdr_send_client_format_data_request(cliprdr, mfc->latestRemoteFormat);
++	if (failed) return CHANNEL_RC_OK;
++
++	/* Decode incoming data separately. The local clipboard may still be an
++	 * in-flight advertised snapshot; conversion must never overwrite it. */
++	wClipboard *incoming = ClipboardCreate();
++	if (!incoming)
+ 	{
+-		if (mfc->requestedFormatId == mfc->serverFormats[index].formatId)
+-			format = &(mfc->serverFormats[index]);
++		(void)SetEvent(mfc->clipboardRequestEvent);
++		return CHANNEL_RC_NO_MEMORY;
+ 	}
+ 
+-	if (!format)
++	const size_t size = formatDataResponse->common.dataLen;
++
++	if (!ClipboardSetData(incoming, formatId, formatDataResponse->requestedFormatData, size))
+ 	{
++		ClipboardDestroy(incoming);
+ 		(void)SetEvent(mfc->clipboardRequestEvent);
+ 		return ERROR_INTERNAL_ERROR;
+ 	}
+ 
+-	if (format->formatName)
+-		formatId = ClipboardRegisterFormat(mfc->clipboard, format->formatName);
+-	else
+-		formatId = format->formatId;
+-
+-	const size_t size = formatDataResponse->common.dataLen;
+-
+-	ClipboardSetData(mfc->clipboard, formatId, formatDataResponse->requestedFormatData, size);
+-
+ 	(void)SetEvent(mfc->clipboardRequestEvent);
+ 
+ 	if ((formatId == CF_TEXT) || (formatId == CF_OEMTEXT) || (formatId == CF_UNICODETEXT))
+ 	{
+-		formatId = ClipboardRegisterFormat(mfc->clipboard, "text/plain");
++		formatId = ClipboardRegisterFormat(incoming, "text/plain");
+ 
+ 		UINT32 dstSize = 0;
+-		char *data = ClipboardGetData(mfc->clipboard, formatId, &dstSize);
++		char *data = ClipboardGetData(incoming, formatId, &dstSize);
++		ClipboardDestroy(incoming);
++		incoming = nullptr;
++		if (!data)
++			return ERROR_INTERNAL_ERROR;
+ 
+ 		dstSize = strnlen(data, dstSize); /* we need the size without the null terminator */
+ 
+@@ -372,11 +448,23 @@
  		                                       encoding:NSUTF8StringEncoding];
  		free(data);
  
@@ -25,13 +306,86 @@ index c336620..9fb7a55 100644
 -		[view->pasteboard_wr declareTypes:types owner:view];
 -		[view->pasteboard_wr setString:str forType:NSPasteboardTypeString];
 +		if (str)
++		{
 +			dispatch_async(dispatch_get_main_queue(), ^{
-+				NSArray *types = [[NSArray alloc] initWithObjects:NSPasteboardTypeString, nil];
-+				[view->pasteboard_wr declareTypes:types owner:view];
-+				[view->pasteboard_wr setString:str forType:NSPasteboardTypeString];
-+				[types release];
++				[delivery performForRemoteGeneration:generation action:^{
++					if (![delivery mayWriteForLocalGeneration:localGeneration version:[view->pasteboard_wr changeCount]]) return;
++					NSArray *types = [[NSArray alloc] initWithObjects:NSPasteboardTypeString, nil];
++					[view->pasteboard_wr declareTypes:types owner:view];
++					[view->pasteboard_wr setString:str forType:NSPasteboardTypeString];
++					[delivery recordRemoteWriteVersion:[view->pasteboard_wr changeCount]];
++					[types release];
++				}];
 +				[str release];
 +			});
++		}
  	}
  
++	ClipboardDestroy(incoming);
  	return CHANNEL_RC_OK;
+ }
+ 
+@@ -405,6 +493,12 @@
+ 
+ void mac_cliprdr_init(mfContext *mfc, CliprdrClientContext *cliprdr)
+ {
++	mfc->clipboardRequestPending = FALSE;
++	mfc->latestRemoteFormat = 0;
++	mfc->requestedRemoteGeneration = 0;
++	mfc->requestedLocalGeneration = 0;
++	mfc->clipboardDelivery = [[VCWClipboardDelivery alloc] initWithEnabled:
++	    freerdp_settings_get_bool(mfc->common.context.settings, FreeRDP_RedirectClipboard)];
+ 	cliprdr->custom = (void *)mfc;
+ 	mfc->cliprdr = cliprdr;
+ 
+@@ -421,12 +515,33 @@
+ 	cliprdr->ServerFormatDataResponse = mac_cliprdr_server_format_data_response;
+ 	cliprdr->ServerFileContentsRequest = mac_cliprdr_server_file_contents_request;
+ 	cliprdr->ServerFileContentsResponse = mac_cliprdr_server_file_contents_response;
++	VCWClipboardDelivery *delivery = (VCWClipboardDelivery *)mfc->clipboardDelivery;
++	MRDPView *view = (MRDPView *)mfc->view;
++	dispatch_async(dispatch_get_main_queue(), ^{
++		[delivery performIfActive:^{
++			if (view) [delivery observeLocalVersion:[view->pasteboard_wr changeCount]];
++			[view vcwSetClipboardDelivery:delivery];
++		}];
++	});
+ }
+ 
+ void mac_cliprdr_uninit(mfContext *mfc, CliprdrClientContext *cliprdr)
+ {
++	VCWClipboardDelivery *delivery = (VCWClipboardDelivery *)mfc->clipboardDelivery;
++	[delivery invalidate];
++	MRDPView *view = (MRDPView *)mfc->view;
++	dispatch_async(dispatch_get_main_queue(), ^{ [view vcwClearClipboardDelivery:delivery]; });
++	[delivery release];
++	mfc->clipboardDelivery = nullptr;
+ 	cliprdr->custom = nullptr;
+ 	mfc->cliprdr = nullptr;
++	mfc->clipboardRequestPending = FALSE;
++	if (mfc->serverFormats)
++		for (UINT32 index = 0; index < mfc->numServerFormats; index++)
++			free(mfc->serverFormats[index].formatName);
++	free(mfc->serverFormats);
++	mfc->serverFormats = nullptr;
++	mfc->numServerFormats = 0;
+ 
+ 	ClipboardDestroy(mfc->clipboard);
+ 	(void)CloseHandle(mfc->clipboardRequestEvent);
+--- a/client/Mac/mfreerdp.h
++++ b/client/Mac/mfreerdp.h
+@@ -54,9 +54,14 @@
+ 	DWORD keyboardThreadId;
+ 
+ 	BOOL clipboardSync;
++	void* clipboardDelivery;
+ 	wClipboard* clipboard;
+ 	UINT32 numServerFormats;
+ 	UINT32 requestedFormatId;
++	BOOL clipboardRequestPending;
++	UINT32 latestRemoteFormat;
++	UINT64 requestedRemoteGeneration;
++	UINT64 requestedLocalGeneration;
+ 	HANDLE clipboardRequestEvent;
+ 	CLIPRDR_FORMAT* serverFormats;
+ 	CliprdrClientContext* cliprdr;
