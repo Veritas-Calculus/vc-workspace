@@ -35,7 +35,7 @@ VC Workspace 已完成面向人的核心纵向闭环：管理员可以初始化�
 | IaC | 已实现首批 | 同一控制面 API、最长 90 天且只显示一次的管理员 API 凭证、`vcworkspace_desktop_assignment` 资源、`vcworkspace_desktops` 数据源、Import 与漂移读取；Terraform 真实 apply/漂移/destroy 已通过 | 更多平台资源、Token Scope/紧急吊销、正式 Provider 签名发布，以及 OpenTofu CLI 验收 |
 | Kubernetes | infra 已部署，基础验收通过 | 私有 amd64 Digest、cert-manager HTTPS、Web/API/MCP/Gateway、mTLS 控制接口、Calico 隔离、Ceph PVC、一次备份恢复与 Mac 经网关连接 Debian 桌面 | 证书/凭据轮换、持续加密备份/PITR、升级回滚、网关稳定性/防绕过及 Builder Worker |
 | Windows/Linux 客户端 | 未开始 | 仅保留目录和跨平台 Session Core 边界 | WinUI 与 GTK4 客户端的登录、桌面库、数据面和发布链 |
-| 开源发布 | 进行中 | 许可证定为 Apache-2.0，`LICENSE`、`CONTRIBUTING.md` 与 `SECURITY.md` 就位；Landing 已指向固定仓库地址；基线 8 个 commit 已 push 到 `Veritas-Calculus/vc-workspace` 的 `main` | 远端 GitHub Actions 首次运行的 `macos` 作业失败，也没有 Release；2026-09-03 起的工作树尚未提交 |
+| 开源发布 | 基线已完成 | 许可证为 Apache-2.0，`LICENSE`、`CONTRIBUTING.md` 与 `SECURITY.md` 就位；Landing 已指向固定仓库地址；全部代码已 push 到 `Veritas-Calculus/vc-workspace` 的 `main`，远端 GitHub Actions 六个作业全绿 | 尚无 Release，正式下载入口待 RELEASE-02 |
 
 ## TODO
 
@@ -48,14 +48,14 @@ VC Workspace 已完成面向人的核心纵向闭环：管理员可以初始化�
 | REVIEW-03 | P0 | 已修复并自动验证 | 防止旧撤销任务误伤新连接 | 持单桌面锁重读连接，已关闭旧快照不再调用 QGA；旧 Session 清理后新 Session 密码不被旋转的 PostgreSQL + 假 PVE 回归通过 |
 | REVIEW-04 | P0 | 进行中 | MCP Helper 跟随每用户交互会话 | Linux 独立 Agent 账号与完整 SDK MCP 链路已实测。024–026 保留固定 UID/SID，不随撤权清空或重绑。Windows 每用户 Helper、本地到期回收与固定 SID 的结构化 SAM/WTS 观察已实现并有原生/交互证据。新增独立无界面 RDP Worker 与 Go 监管；Windows 10 已使用它通过双用户完整交互及到期注销，Linux ARM64 容器安全回归通过。默认 Windows MCP 仍关闭，剩余安装/服务恢复、无需人工处理首次登录的模板、Broker 账号/Lease/进程所有权、REVIEW-12 的 Guest 写入版本保护与默认执行端接线；另剩 Native 显式观察/接管同一现场、升级/新模板实建、多会话和异常网络矩阵。逐批结果见最近验证，不以实验 Guest 协议或单个连接组件代替整体 MCP 验收 |
 | REVIEW-05 | P0 | 已修复并自动验证 | 策略升级强制重新收敛 | 新增 019 迁移，不修改已发布 018；旧 applied revision 递增为 pending，重复迁移不重复递增；升级回归通过 |
-| REVIEW-06 | P0 | 已修复并本地构建 | 修复控制面容器缺少嵌入资源 | Dockerfile 包含品牌资源，本地实际 Docker build 成功；CI 新增镜像构建门禁，远端执行由 RELEASE-01 验收 |
+| REVIEW-06 | P0 | 已修复并远端验证 | 修复控制面容器缺少嵌入资源 | Dockerfile 包含品牌资源，本地实际 Docker build 成功；CI 的控制面与 Session Gateway 镜像构建门禁已在远端运行 `34682175646` 的 `core` 作业中通过 |
 | REVIEW-07 | P0 | 已修复并自动验证 | 并发迁移与测试数据库隔离 | 迁移在专用连接持数据库锁，释放失败关闭连接；两个 Store 同时首次迁移和重复迁移通过；集成测试使用独立 schema，CI 显式运行 PostgreSQL 与 race 测试 |
 | REVIEW-08 | P1 | 已修复并浏览器验证 | Web 会话失效恢复 | 受保护 API 的 401 清空页面后返回登录，匿名/错误密码不跳转，403 不误判过期；中英文、明暗主题、窄屏及键盘重新登录通过 |
 | REVIEW-09 | P1 | 已修复并浏览器验证 | Web 任务轮询恢复 | 单在途读取、15 秒超时、临时失败退避与重试入口、权限/不存在终止、清理后不更新；浏览器模拟 502 后恢复同一 Job，确认启停只提交一次 |
 | REVIEW-10 | P0 | Linux 默认链路已修复并实测，Windows 基础已验证 | Guest 授权乱序、发布中断与撤权版本保护 | 025 增加 VM 持久化 epoch，撤销队列保留 closing epoch，关闭租约不能复活；Linux 改为 stdin 独立输入、Guest 排他锁与单调比较提交，新授权文件隔离旧发布者。真实 PostgreSQL 升级/重领/失败清理/旧队列版本、Linux 延迟旧 active/revoke、进程中断恢复/旧协议迁移/Helper 重启和最终 PVE MCP 回归通过。Windows 实验栅栏及多用户原子提交已在上批原生验证；默认 Windows 接线仍随 REVIEW-04 验收，不以此宣称跨端全部闭环 |
 | REVIEW-11 | P0 | 已修复并跨 OS 实测 | 拒绝 QGA 异常退出及不完整回执 | 缺失 exitcode、signal/Windows 异常、截断或无效元数据不再变成零退出码成功；不重发有副作用的命令。15 个状态矩阵子用例、真实 Linux 正常/非零/自身信号退出、Windows 正常/异常式退出均通过；交互验收清理增加明确回执和独立精确身份残留检查 |
 | REVIEW-12 | P0 | Linux 默认链路已实测，Windows 资料保护修复中 | Guest 账号生命周期的迟到写入隔离 | 027/028 固定身份、单调版本、原子 Connection 提交及双副本恢复已有自动或真库证据。隔离 Debian 的 PAM/root 孤儿、服务/到期/开机回收、冻结 Xorg 与节点清理，以及默认 HTTP→macOS 保留应用重连、撤权、恢复授权和注销已实测。Windows Native 独立 SAM/WTS 执行端及 10/11 真实账号密码、到期和中断恢复测试通过；仍须默认 Broker、真实桌面保留与登录/进程创建边界、DPAPI/凭据库跨轮换与新登录的数据完整性。已实测拒绝已有 Profile 的不安全重置；禁用/过期改密及密钥迁移候选仍失败，不能上线。其他剩余项包括旧账号归属与进程排空/升级、PID 1/systemd 异常与在途 logind 重启、其他登录入口和全链路故障矩阵。逐批边界见最近验证，不以局部通过关闭整体项 |
-| RELEASE-01 | P0 | 远端 CI 修复中 | 建立开源仓库基线 | 许可证已定为 Apache-2.0，`LICENSE`、`CONTRIBUTING.md`、`SECURITY.md` 已完成；版权归属为 `Veritas-Calculus`，Go 模块路径已对齐仓库地址；基线已 push 到远端 `main`。剩余条件是让 GitHub Actions 在远端通过：首次运行 `core` 与两个 `guest-agent-artifacts` 作业通过，`macos` 作业在 `build-app.sh` 失败。因为 `build-native-rdp.sh` 与 `verify-app.sh` 要求 `rg`，而 GitHub macOS Runner 不预装 ripgrep，两个脚本已改用 `grep`；另修复 `internal/pve/principal_test.go` 复制 `sync.Mutex` 导致的 `go vet` 失败。两项修复推送后，远端 `core`、`macos`、`linux-computer-sessions`、`headless-session-worker` 四个作业全部通过；剩余 `guest-agent-artifacts (windows-latest)` 的 Windows 会话回归失败，见最近验证 |
+| RELEASE-01 | P0 | 已完成 | 建立开源仓库基线 | 许可证为 Apache-2.0，`LICENSE`、`CONTRIBUTING.md`、`SECURITY.md` 就位；版权归属 `Veritas-Calculus`，Go 模块路径已对齐仓库地址；代码已 push 到 `Veritas-Calculus/vc-workspace` 的 `main`；GitHub Actions 运行 `34682175646` 六个作业全部通过（`core`、`macos`、`linux-computer-sessions`、`headless-session-worker` 与两个 `guest-agent-artifacts`）。首个 Release 属于 RELEASE-02，不在本项条件内 |
 | AI-01 | P0 | Linux 已复验，跨端修复中 | MCP Computer Use 最小纵向切片 | Debian 13 已按独立 Agent 身份完成 SDK MCP HTTP→PVE→Guest 实测；Windows 10/11 新的独立 SID/真实登录 Helper 已通过顺序双用户图形与输入断言，仍不是默认 SDK MCP/无人值守登录证据。REVIEW-04 的 Windows 默认链路、新模板与显式人工观察/接管未完成前，不把整体跨端能力视为闭环 |
 | POLICY-01 | P0 | 进行中 | 完成 M11 会话策略基础 | 每桌面数据模型、Web、哈希快照、macOS/Guest 执行端、审计、Debian 13 实机与未应用拒绝建联已完成；仍需多作用域解析、密码学签名/Guest 回报，以及剪贴板、文件/磁盘重定向和受管背景在 Windows 与 macOS 用户路径实测 |
 | IMAGE-01 | P0 | Debian 实建与 Mac 切片已通过，仍在验证 | 通过 Web 完成模板 Bootstrap 闭环 | Web 创建 Debian 13 VM9202、完整克隆 VM9203、首次启动/Agent/QGA 与 Mac 全屏/重连已实测；克隆使用受限 PVE API，Web 尚缺从 testing 状态创建验证克隆的入口。首次 TCP 失败及输入异常、Windows 11 实建与最终 ready 未完成；Windows 10 是否生产启用由介质支持与授权决定 |
@@ -89,6 +89,10 @@ VC Workspace 已完成面向人的核心纵向闭环：管理员可以初始化�
 - Session Gateway 已在 infra 的域名/Ingress 上部署；后续互联网可达范围、Guest 防绕过与 WAN 故障/负载验收仍需明确，不将内网域名证据当作互联网验收。
 
 ## 最近验证
+
+- 2026-09-12（远端 CI 全绿，RELEASE-01 完成）：运行 `34682175646` 六个作业全部通过。Windows 会话门禁改为提供合格账号后真实执行：托管账号一轮 `running 93 tests`，结果 `53 passed; 0 failed; 40 ignored; 1 filtered out`；SYSTEM 一轮 `1 passed; 0 failed; 93 filtered out`。53 加 1 等于此前的 36 通过加 18 失败，说明原先失败的 18 条现在真实运行并通过，不是被跳过。
+
+  中间失败一轮的原因是过滤器写错：cargo 会把 `target.name` 的连字符改写为下划线（`vc_workspace_windows_session`），按包名匹配永远为空，构建成功后仍抛 `no vc-workspace-windows-session test executable`。改为匹配 `package_id` 中的 `#vc-workspace-windows-session@`，该字段保留原始包名；同一过滤逻辑已在本机对 `vc-workspace-session-core` 验证命中。
 
 - 2026-09-12（远端 CI 首次完整执行与 Windows 会话门禁）：推送 `b637a52`–`a0abda1` 后远端运行 `34679990491`。`core`（14 分 1 秒）、`macos`（7 分 21 秒）、`linux-computer-sessions`（5 分 10 秒）、`headless-session-worker`（1 分 41 秒）通过，`rg` 与 `go vet` 两项修复在远端生效，`make macos-gateway-check` 也在 CI 通过。`guest-agent-artifacts (windows-latest)` 失败，其 ubuntu 矩阵项因 fail-fast 被取消，不是独立失败。
 
