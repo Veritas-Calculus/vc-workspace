@@ -135,7 +135,87 @@ jobs:
         run: cc -O2 -Wall -Wextra -Werror -fPIC -fvisibility=hidden -shared -DVC_WORKSPACE_NATIVE_PAM -Wl,-z,relro,-z,now,-z,noexecstack,-z,defs -o target/release/pam_vcworkspace_native.so crates/guest-agent/native/linux/pam_vcworkspace.c -lpam -lsystemd
       - name: Windows session identity and authenticated pipe regression
         if: runner.os == 'Windows'
-        run: cargo test --locked -p vc-workspace-windows-session -- --test-threads=1
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # schtasks /Delete on a missing task exits non-zero; check native
+          # exit codes explicitly instead of aborting on every one.
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          # valid_account_sid() accepts only S-1-5-18 or S-1-5-21-...-RID>=1000,
+          # so the runner's own account cannot bind the helper pipe. Build here,
+          # then run the suite under a disposable managed account, and the one
+          # require_system() case as LocalSystem.
+          $artifacts = cargo test --locked -p vc-workspace-windows-session --no-run --message-format=json |
+            ForEach-Object { try { $_ | ConvertFrom-Json } catch { } } |
+            Where-Object { $_.reason -eq 'compiler-artifact' -and $_.executable -and $_.target.test }
+          $built = ($artifacts | Where-Object { $_.target.name -eq 'vc-workspace-windows-session' } |
+            Select-Object -Last 1).executable
+          if ($LASTEXITCODE -ne 0) { throw "cargo test --no-run failed with exit code $LASTEXITCODE" }
+          if (-not $built) { throw 'no vc-workspace-windows-session test executable' }
+
+          # Staged outside the workspace: the managed account gets read/execute
+          # here and no access to cargo, rustup or the registry cache.
+          $stage = 'C:\vcw-windows-session'
+          Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          $target = Join-Path $stage 'windows-session-tests.exe'
+          Copy-Item $built $target -Force
+
+          $account = 'vcwci'
+          $bytes = New-Object byte[] 24
+          [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+          $password = [Convert]::ToBase64String($bytes) + '!Aa1'
+          $secure = ConvertTo-SecureString $password -AsPlainText -Force
+          Remove-LocalUser -Name $account -ErrorAction SilentlyContinue
+          New-LocalUser -Name $account -Password $secure -AccountNeverExpires -PasswordNeverExpires -UserMayNotChangePassword | Out-Null
+          # Administrators keeps the registry and worker cases that already pass
+          # as the runner account; the SID still carries RID >= 1000.
+          Add-LocalGroupMember -Group 'Administrators' -Member $account
+          $acl = Get-Acl $stage
+          $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $account, 'ReadAndExecute', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+          Set-Acl -Path $stage -AclObject $acl
+
+          # Scheduled tasks avoid the UAC-filtered token that Start-Process
+          # -Credential would hand a local administrator.
+          function Invoke-Staged([string] $label, [string] $taskArgs, [string] $runAs, [string] $runPassword) {
+            $out = Join-Path $stage "$label-out.txt"
+            $code = Join-Path $stage "$label-code.txt"
+            $script = Join-Path $stage "$label.cmd"
+            @"
+          @echo off
+          "$target" $taskArgs > "$out" 2>&1
+          echo %ERRORLEVEL% > "$code"
+          "@ | Set-Content -Path $script -Encoding ASCII
+            $name = "vcw-$label"
+            schtasks /Delete /TN $name /F *> $null
+            if ($runPassword) {
+              schtasks /Create /TN $name /TR "`"$script`"" /SC ONCE /ST 00:00 /RU $runAs /RP $runPassword /RL HIGHEST /F | Out-Null
+            } else {
+              schtasks /Create /TN $name /TR "`"$script`"" /SC ONCE /ST 00:00 /RU $runAs /RL HIGHEST /F | Out-Null
+            }
+            schtasks /Run /TN $name | Out-Null
+            $deadline = (Get-Date).AddMinutes(10)
+            $status = $null
+            while ($null -eq $status) {
+              if ((Get-Date) -gt $deadline) { throw "$label run timed out" }
+              Start-Sleep -Seconds 2
+              if (-not (Test-Path $code)) { continue }
+              $text = (Get-Content $code -Raw).Trim()
+              if ($text -match '^-?\d+$') { $status = [int] $text }
+            }
+            schtasks /Delete /TN $name /F *> $null
+            if (Test-Path $out) { Get-Content $out }
+            if ($status -ne 0) { throw "$label run failed with exit code $status" }
+          }
+
+          $systemOnly = 'platform::registry::accounts::native::secret::tests::system_secret_is_owner_bound_and_never_serializes_plaintext'
+          Invoke-Staged 'managed' "--test-threads=1 --skip $systemOnly" "$env:COMPUTERNAME\$account" $password
+          Invoke-Staged 'system' "--test-threads=1 --exact $systemOnly" 'SYSTEM' ''
+
+          Remove-LocalUser -Name $account -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
