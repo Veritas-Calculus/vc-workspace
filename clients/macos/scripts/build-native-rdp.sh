@@ -25,7 +25,7 @@ openssl_build_dir="${runtime_root}/openssl-build"
 openssl_install_dir="${runtime_root}/openssl-install"
 openssl_archive="${runtime_root}/openssl-${openssl_version}.tar.gz"
 
-for command_name in cmake ninja clang make patch shasum install_name_tool otool rg; do
+for command_name in cmake ninja clang make patch shasum install_name_tool otool; do
   if ! command -v "${command_name}" >/dev/null 2>&1; then
     echo "native RDP build requires ${command_name}" >&2
     exit 1
@@ -94,7 +94,7 @@ if [[ ! -f "${openssl_install_dir}/lib/libssl.3.dylib" ]]; then
 fi
 
 if [[ -f "${build_dir}/CMakeCache.txt" ]] &&
-   ! rg -Fq "CMAKE_HOME_DIRECTORY:INTERNAL=${source_dir}" "${build_dir}/CMakeCache.txt"; then
+   ! grep -Fq "CMAKE_HOME_DIRECTORY:INTERNAL=${source_dir}" "${build_dir}/CMakeCache.txt"; then
   echo "FreeRDP source root changed; replacing generated CMake build directory"
   cmake -E remove_directory "${build_dir}"
 fi
@@ -216,7 +216,7 @@ while IFS= read -r -d '' library; do
   else
     desired_rpath="@loader_path/.."
   fi
-  if ! otool -l "${library}" | rg -q "path ${desired_rpath} "; then
+  if ! grep -Fq "path ${desired_rpath} " <<<"$(otool -l "${library}")"; then
     install_name_tool -add_rpath "${desired_rpath}" "${library}"
   fi
 

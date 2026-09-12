@@ -1,6 +1,6 @@
 # 项目状态与 TODO
 
-更新日期：2026-09-08
+更新日期：2026-09-12
 
 本文是项目“现在做到哪里、接下来做什么”的唯一当前事实源。[MVP 开发计划](mvp.md)保留里程碑、实施顺序和实机证据；架构文档只描述已经采用的边界，不重复维护任务清单。
 
@@ -35,7 +35,7 @@ VC Workspace 已完成面向人的核心纵向闭环：管理员可以初始化�
 | IaC | 已实现首批 | 同一控制面 API、最长 90 天且只显示一次的管理员 API 凭证、`vcworkspace_desktop_assignment` 资源、`vcworkspace_desktops` 数据源、Import 与漂移读取；Terraform 真实 apply/漂移/destroy 已通过 | 更多平台资源、Token Scope/紧急吊销、正式 Provider 签名发布，以及 OpenTofu CLI 验收 |
 | Kubernetes | infra 已部署，基础验收通过 | 私有 amd64 Digest、cert-manager HTTPS、Web/API/MCP/Gateway、mTLS 控制接口、Calico 隔离、Ceph PVC、一次备份恢复与 Mac 经网关连接 Debian 桌面 | 证书/凭据轮换、持续加密备份/PITR、升级回滚、网关稳定性/防绕过及 Builder Worker |
 | Windows/Linux 客户端 | 未开始 | 仅保留目录和跨平台 Session Core 边界 | WinUI 与 GTK4 客户端的登录、桌面库、数据面和发布链 |
-| 开源发布 | 进行中 | 已建立首个 commit；许可证定为 Apache-2.0，`LICENSE`、`CONTRIBUTING.md` 与 `SECURITY.md` 就位；Landing 已指向固定仓库地址 | 尚未 push 到远端，远端 GitHub Actions 未验证，也没有 Release |
+| 开源发布 | 进行中 | 许可证定为 Apache-2.0，`LICENSE`、`CONTRIBUTING.md` 与 `SECURITY.md` 就位；Landing 已指向固定仓库地址；基线 8 个 commit 已 push 到 `Veritas-Calculus/vc-workspace` 的 `main` | 远端 GitHub Actions 首次运行的 `macos` 作业失败，也没有 Release；2026-09-03 起的工作树尚未提交 |
 
 ## TODO
 
@@ -55,7 +55,7 @@ VC Workspace 已完成面向人的核心纵向闭环：管理员可以初始化�
 | REVIEW-10 | P0 | Linux 默认链路已修复并实测，Windows 基础已验证 | Guest 授权乱序、发布中断与撤权版本保护 | 025 增加 VM 持久化 epoch，撤销队列保留 closing epoch，关闭租约不能复活；Linux 改为 stdin 独立输入、Guest 排他锁与单调比较提交，新授权文件隔离旧发布者。真实 PostgreSQL 升级/重领/失败清理/旧队列版本、Linux 延迟旧 active/revoke、进程中断恢复/旧协议迁移/Helper 重启和最终 PVE MCP 回归通过。Windows 实验栅栏及多用户原子提交已在上批原生验证；默认 Windows 接线仍随 REVIEW-04 验收，不以此宣称跨端全部闭环 |
 | REVIEW-11 | P0 | 已修复并跨 OS 实测 | 拒绝 QGA 异常退出及不完整回执 | 缺失 exitcode、signal/Windows 异常、截断或无效元数据不再变成零退出码成功；不重发有副作用的命令。15 个状态矩阵子用例、真实 Linux 正常/非零/自身信号退出、Windows 正常/异常式退出均通过；交互验收清理增加明确回执和独立精确身份残留检查 |
 | REVIEW-12 | P0 | Linux 默认链路已实测，Windows 资料保护修复中 | Guest 账号生命周期的迟到写入隔离 | 027/028 固定身份、单调版本、原子 Connection 提交及双副本恢复已有自动或真库证据。隔离 Debian 的 PAM/root 孤儿、服务/到期/开机回收、冻结 Xorg 与节点清理，以及默认 HTTP→macOS 保留应用重连、撤权、恢复授权和注销已实测。Windows Native 独立 SAM/WTS 执行端及 10/11 真实账号密码、到期和中断恢复测试通过；仍须默认 Broker、真实桌面保留与登录/进程创建边界、DPAPI/凭据库跨轮换与新登录的数据完整性。已实测拒绝已有 Profile 的不安全重置；禁用/过期改密及密钥迁移候选仍失败，不能上线。其他剩余项包括旧账号归属与进程排空/升级、PID 1/systemd 异常与在途 logind 重启、其他登录入口和全链路故障矩阵。逐批边界见最近验证，不以局部通过关闭整体项 |
-| RELEASE-01 | P0 | 进行中 | 建立开源仓库基线 | 许可证已定为 Apache-2.0，`LICENSE`、`CONTRIBUTING.md`、`SECURITY.md` 和首个 commit 已完成；版权归属为 `Veritas-Calculus`，Go 模块路径已对齐仓库地址；剩余条件是 push 到远端并让 GitHub Actions 在远端通过 |
+| RELEASE-01 | P0 | 远端 CI 修复中 | 建立开源仓库基线 | 许可证已定为 Apache-2.0，`LICENSE`、`CONTRIBUTING.md`、`SECURITY.md` 已完成；版权归属为 `Veritas-Calculus`，Go 模块路径已对齐仓库地址；基线已 push 到远端 `main`。剩余条件是让 GitHub Actions 在远端通过：首次运行 `core` 与两个 `guest-agent-artifacts` 作业通过，`macos` 作业在 `build-app.sh` 失败。因为 `build-native-rdp.sh` 与 `verify-app.sh` 要求 `rg`，而 GitHub macOS Runner 不预装 ripgrep，两个脚本已改用 `grep`；另修复 `internal/pve/principal_test.go` 复制 `sync.Mutex` 导致的 `go vet` 失败。两项修复已提交，尚未推送，远端仍是失败状态 |
 | AI-01 | P0 | Linux 已复验，跨端修复中 | MCP Computer Use 最小纵向切片 | Debian 13 已按独立 Agent 身份完成 SDK MCP HTTP→PVE→Guest 实测；Windows 10/11 新的独立 SID/真实登录 Helper 已通过顺序双用户图形与输入断言，仍不是默认 SDK MCP/无人值守登录证据。REVIEW-04 的 Windows 默认链路、新模板与显式人工观察/接管未完成前，不把整体跨端能力视为闭环 |
 | POLICY-01 | P0 | 进行中 | 完成 M11 会话策略基础 | 每桌面数据模型、Web、哈希快照、macOS/Guest 执行端、审计、Debian 13 实机与未应用拒绝建联已完成；仍需多作用域解析、密码学签名/Guest 回报，以及剪贴板、文件/磁盘重定向和受管背景在 Windows 与 macOS 用户路径实测 |
 | IMAGE-01 | P0 | Debian 实建与 Mac 切片已通过，仍在验证 | 通过 Web 完成模板 Bootstrap 闭环 | Web 创建 Debian 13 VM9202、完整克隆 VM9203、首次启动/Agent/QGA 与 Mac 全屏/重连已实测；克隆使用受限 PVE API，Web 尚缺从 testing 状态创建验证克隆的入口。首次 TCP 失败及输入异常、Windows 11 实建与最终 ready 未完成；Windows 10 是否生产启用由介质支持与授权决定 |
@@ -89,6 +89,8 @@ VC Workspace 已完成面向人的核心纵向闭环：管理员可以初始化�
 - Session Gateway 已在 infra 的域名/Ingress 上部署；后续互联网可达范围、Guest 防绕过与 WAN 故障/负载验收仍需明确，不将内网域名证据当作互联网验收。
 
 ## 最近验证
+
+- 2026-09-12（远端 CI 首次失败归因与本地门禁复核）：基线 8 个 commit 已在远端 `main`，GitHub Actions 首次运行的 `core`、`guest-agent-artifacts`（Linux/Windows）通过，`macos` 作业在 `./scripts/build-app.sh release` 退出 1，日志为 `native RDP build requires rg`。因为 GitHub macOS Runner 不预装 ripgrep，`build-native-rdp.sh` 与 `verify-app.sh` 已去掉 `rg` 依赖改用 `grep`：三处字面匹配用 `grep -F`，`minos` 检查用 `grep -E '^[[:space:]]+minos 14\.0$'`；管道改为 herestring，避免 `pipefail` 下 `grep -q` 提前退出使上游收到 SIGPIPE 而误判未匹配。本机以真实 FreeRDP 3.31.0/OpenSSL 3.5.8 完整重建 `.app` 并通过 `verify-app.sh`。另修复 `go vet ./...` 失败：`internal/pve/principal_test.go` 的表驱动用例按值复制含 `sync.Mutex` 的 `Client`，改为 `*Client`。复核本地可执行的 CI 门禁：`go build`、`go vet`、`go test ./...`、`cargo test --workspace`、`pnpm check/test/build`、`make iac-check`、`swift test`（67 项）全部通过。尚未验证的远端门禁是两个 `docker build`、Playwright 浏览器回归、`make macos-gateway-check`/`macos-rdp-reactivation-check` 与两个 Linux 容器作业。2026-09-03 起的工作已在本轮纳入版本控制（`b637a52`），此前远端 CI 结论只覆盖 2026-09-02 的基线；推送后需要重新以完整代码验证一次。
 
 - 2026-09-08（IME事件宿主组件）：新增NSTextInputContext事务宿主，生产默认工厂创建真实AppKit上下文，测试注入仅替代上下文事件处理。区分本地IME与物理按键，消费IME处理的按下/松开对，Command/Control与无组合文本的命令仍返回物理路径；取消先失效客户端再discard/deactivate，抵御丢弃时同步unmark提交。组件测试覆盖组合不发送、下一事务、重复松键、快捷键、命令回退、旧客户端迟到提交及discard回调，ASan/UBSan和现有原生门禁通过。该宿主尚未挂到实际MRDPView，也未提供preedit可视层/真实候选位置与输入源检测，测试没有调用真实输入法；本地IME仍未启用，后续需完成视图挂载和中文实际验收。
 

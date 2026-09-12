@@ -11,7 +11,7 @@ if [[ ! -d "${app_dir}" ]]; then
   exit 1
 fi
 
-for command_name in codesign file find otool plutil rg vtool; do
+for command_name in codesign file find otool plutil vtool; do
   if ! command -v "${command_name}" >/dev/null 2>&1; then
     echo "app verification requires ${command_name}" >&2
     exit 1
@@ -20,7 +20,7 @@ done
 
 icon_name="$(plutil -extract CFBundleIconFile raw "${contents_dir}/Info.plist")"
 icon_path="${contents_dir}/Resources/${icon_name%.icns}.icns"
-if [[ ! -f "${icon_path}" ]] || ! file "${icon_path}" | rg -q 'Mac OS X icon'; then
+if [[ ! -f "${icon_path}" ]] || ! grep -Fq 'Mac OS X icon' <<<"$(file "${icon_path}")"; then
   echo "missing or invalid application icon: ${icon_path}" >&2
   exit 1
 fi
@@ -29,7 +29,7 @@ codesign --verify --deep --strict --verbose=2 "${app_dir}"
 
 verification_failed=0
 while IFS= read -r -d '' binary; do
-  if ! file "${binary}" | rg -q 'Mach-O'; then
+  if ! grep -Fq 'Mach-O' <<<"$(file "${binary}")"; then
     continue
   fi
 
@@ -51,7 +51,7 @@ while IFS= read -r -d '' binary; do
     esac
   done < <(otool -l "${binary}" | awk '/cmd LC_RPATH/ { getline; getline; print $2 }')
 
-  if ! vtool -show-build "${binary}" | rg -q '^\s+minos 14\.0$'; then
+  if ! grep -Eq '^[[:space:]]+minos 14\.0$' <<<"$(vtool -show-build "${binary}")"; then
     echo "unexpected deployment target: ${binary}" >&2
     verification_failed=1
   fi
