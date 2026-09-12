@@ -692,6 +692,11 @@ VCW_EXPORT void* vcw_rdp_session_create(const char* host, uint16_t port, const c
 		    freerdp_settings_set_bool(settings, FreeRDP_ExtSecurity, FALSE) &&
 		    freerdp_settings_set_bool(settings, FreeRDP_GatewayEnabled, FALSE) &&
 		    freerdp_settings_set_bool(settings, FreeRDP_AutoReconnectionEnabled, FALSE) &&
+		    /* The tunnel descriptor is already connected to the Guest. Without
+		     * this, proxy_prepare() still reads https_proxy/HTTPS_PROXY and makes
+		     * transport_connect() write an HTTP CONNECT preamble onto our socket,
+		     * which the Guest never answers. */
+		    freerdp_settings_set_uint32(settings, FreeRDP_ProxyType, PROXY_TYPE_IGNORE) &&
 		    freerdp_settings_set_uint16(settings, FreeRDP_TLSMinVersion, TLS1_2_VERSION);
 		const int owned = configured ? fcntl(gatewaySocket, F_DUPFD_CLOEXEC, 0) : -1;
 		if (owned < 0)
